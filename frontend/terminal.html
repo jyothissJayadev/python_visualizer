@@ -1,0 +1,3377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Brain Terminal — Live Trace & Function I/O Inspector</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* ==========================================================================
+       RESET & BASE THEME VARIABLES
+       ========================================================================== */
+    /* Vintage phosphor-terminal palette: near-black ground, neon-green
+       body text, monospace everywhere. Accent roles are kept from the
+       original build — cyan = inputs, green = outputs, crimson = errors,
+       violet = LLM — just retuned to sit on black. */
+    :root {
+      --bg-root: #030503;
+      --bg-panel: #060a06;
+      --bg-surface: #0a0f0a;
+      --bg-surface-hover: #0f1a0f;
+      --bg-surface-active: #14251a;
+      --bg-input: #050805;
+      --bg-code: #020402;
+
+      --border-subtle: #123312;
+      --border-strong: #1f5a2e;
+      --border-highlight: #39ff14;
+
+      --text-primary: #86f5a9;
+      --text-secondary: #4fae67;
+      --text-muted: #337a46;
+      --text-dim: #1f4a2c;
+
+      --accent-cyan: #3ce7ff;
+      --accent-cyan-bg: rgba(60, 231, 255, 0.09);
+      --accent-violet: #c58bff;
+      --accent-violet-bg: rgba(197, 139, 255, 0.12);
+      --accent-emerald: #4ade80;
+      --accent-emerald-bg: rgba(74, 222, 128, 0.12);
+      --accent-amber: #ffcf4d;
+      --accent-amber-bg: rgba(255, 207, 77, 0.1);
+      --accent-rose: #ff5c5c;
+      --accent-rose-bg: rgba(255, 92, 92, 0.13);
+      --accent-blue: #35d0a0;
+      --accent-blue-bg: rgba(53, 208, 160, 0.1);
+
+      --font-sans: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+      --sidebar-w: 280px;
+      --inspector-w: 480px;
+      --header-h: 46px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-root);
+      color: var(--text-primary);
+      font-family: var(--font-mono);
+      font-size: 13px;
+      line-height: 1.45;
+      overflow: hidden;
+      height: 100vh;
+      width: 100vw;
+      user-select: none;
+      -webkit-font-smoothing: antialiased;
+      text-shadow: 0 0 1px rgba(134, 245, 169, 0.22);
+    }
+
+    /* Faint CRT scanlines over the live stream only — subtle enough to
+       leave text crisp. */
+    main.stream-pane::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 5;
+      background: repeating-linear-gradient(
+        to bottom,
+        rgba(0, 0, 0, 0) 0px,
+        rgba(0, 0, 0, 0) 2px,
+        rgba(0, 20, 6, 0.14) 3px
+      );
+    }
+
+    /* Scrollbars */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #253347;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #394b63;
+    }
+
+    button {
+      font-family: inherit;
+      font-size: 12px;
+      cursor: pointer;
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-surface);
+      color: var(--text-primary);
+      border-radius: 5px;
+      padding: 4px 9px;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+    }
+    button:hover {
+      background: var(--bg-surface-hover);
+      border-color: var(--border-strong);
+      color: #fff;
+    }
+    button:active {
+      background: var(--bg-surface-active);
+      transform: translateY(1px);
+    }
+    button.btn-primary {
+      background: #0f3d24;
+      border-color: var(--accent-emerald);
+      color: #d6ffe4;
+    }
+    button.btn-primary:hover {
+      background: #14532b;
+      border-color: #6ee79a;
+    }
+    button.btn-sm {
+      padding: 2px 6px;
+      font-size: 11px;
+      border-radius: 4px;
+    }
+    button.btn-icon {
+      padding: 4px 6px;
+    }
+    button.active {
+      background: #1e293e;
+      border-color: var(--accent-cyan);
+      color: var(--accent-cyan);
+    }
+
+    input, textarea, select {
+      font-family: inherit;
+      font-size: 12px;
+      background: var(--bg-input);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-primary);
+      border-radius: 5px;
+      padding: 5px 8px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input:focus, textarea:focus, select:focus {
+      border-color: var(--accent-cyan);
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 10.5px;
+      font-family: var(--font-mono);
+      font-weight: 600;
+      letter-spacing: 0.3px;
+      line-height: 1.3;
+    }
+    .badge-fast { background: var(--accent-emerald-bg); color: var(--accent-emerald); border: 1px solid rgba(52, 211, 153, 0.3); }
+    .badge-med  { background: var(--accent-amber-bg); color: var(--accent-amber); border: 1px solid rgba(251, 191, 36, 0.3); }
+    .badge-slow { background: var(--accent-rose-bg); color: var(--accent-rose); border: 1px solid rgba(248, 113, 113, 0.35); }
+    .badge-llm  { background: var(--accent-violet-bg); color: var(--accent-violet); border: 1px solid rgba(192, 132, 252, 0.3); }
+    .badge-cyan { background: var(--accent-cyan-bg); color: var(--accent-cyan); border: 1px solid rgba(56, 189, 248, 0.3); }
+    .badge-dim  { background: #16202e; color: var(--text-secondary); border: 1px solid var(--border-subtle); }
+
+    /* ==========================================================================
+       MAIN APP CONTAINER & HEADER TOOLBAR
+       ========================================================================== */
+    #app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      width: 100vw;
+    }
+
+    header.app-toolbar {
+      height: var(--header-h);
+      min-height: var(--header-h);
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      gap: 12px;
+      z-index: 50;
+    }
+
+    .toolbar-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .app-brand {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-weight: 700;
+      font-size: 13.5px;
+      letter-spacing: 0.5px;
+      color: #fff;
+    }
+    .app-brand .brain-icon {
+      color: var(--accent-violet);
+      filter: drop-shadow(0 0 8px rgba(192, 132, 252, 0.5));
+    }
+    .app-brand .brand-tag {
+      font-size: 9.5px;
+      padding: 1px 4px;
+      background: #1e293b;
+      color: var(--accent-cyan);
+      border-radius: 3px;
+      font-family: var(--font-mono);
+      font-weight: 500;
+    }
+
+    .toolbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: 8px;
+    }
+
+    .verbosity-segmented {
+      display: flex;
+      background: var(--bg-input);
+      border: 1px solid var(--border-subtle);
+      border-radius: 5px;
+      padding: 2px;
+    }
+    .verbosity-btn {
+      border: none;
+      background: transparent;
+      padding: 2px 8px;
+      font-size: 11px;
+      color: var(--text-secondary);
+      border-radius: 3px;
+    }
+    .verbosity-btn.active {
+      background: #1e293e;
+      color: var(--accent-cyan);
+      font-weight: 600;
+    }
+
+    .search-filter-box {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    .search-filter-box input {
+      width: 170px;
+      height: 26px;
+      padding-left: 24px;
+      font-size: 11.5px;
+    }
+    .search-filter-box .search-icon {
+      position: absolute;
+      left: 7px;
+      color: var(--text-muted);
+      pointer-events: none;
+    }
+
+    .toolbar-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    /* Status dot */
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 8px;
+      background: #121926;
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--text-secondary);
+    }
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #ef4444;
+      box-shadow: 0 0 6px #ef4444;
+    }
+    .status-dot.connected {
+      background: #10b981;
+      box-shadow: 0 0 8px #10b981;
+    }
+    .status-dot.reconnecting {
+      background: #f59e0b;
+      box-shadow: 0 0 8px #f59e0b;
+      animation: pulse 1.2s infinite;
+    }
+    .status-dot.mock {
+      background: #a855f7;
+      box-shadow: 0 0 8px #a855f7;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.85); }
+    }
+
+    /* Mode Switch */
+    .mode-switch-pill {
+      display: flex;
+      align-items: center;
+      background: #0f1622;
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      padding: 2px;
+    }
+    .mode-btn {
+      border: none;
+      padding: 3px 8px;
+      font-size: 11px;
+      color: var(--text-secondary);
+      border-radius: 4px;
+      background: transparent;
+    }
+    .mode-btn.active {
+      background: #1d293d;
+      color: #fff;
+      font-weight: 600;
+    }
+    .mode-btn.active.mock-active {
+      background: rgba(168, 85, 247, 0.2);
+      color: var(--accent-violet);
+      border: 1px solid rgba(168, 85, 247, 0.4);
+    }
+
+    /* ==========================================================================
+       MAIN WORKSPACE (3 REGIONS)
+       ========================================================================== */
+    .workspace-body {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* --------------------------------------------------------------------------
+       REGION 1: FUNCTION CATALOG (LEFT)
+       -------------------------------------------------------------------------- */
+    aside.catalog-pane {
+      width: var(--sidebar-w);
+      min-width: var(--sidebar-w);
+      background: var(--bg-panel);
+      border-right: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      transition: width 0.2s ease, min-width 0.2s ease, margin-left 0.2s ease;
+      z-index: 30;
+      position: relative;
+    }
+    aside.catalog-pane.collapsed {
+      margin-left: calc(-1 * var(--sidebar-w));
+    }
+
+    .catalog-header {
+      padding: 10px 10px 8px 10px;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+    .catalog-title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .catalog-title {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.6px;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .catalog-search-wrap {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    .catalog-search-wrap input {
+      width: 100%;
+      height: 26px;
+      padding-left: 24px;
+      padding-right: 22px;
+      font-size: 11.5px;
+      background: #090e17;
+    }
+    .catalog-search-wrap .search-icon {
+      position: absolute;
+      left: 7px;
+      color: var(--text-muted);
+      pointer-events: none;
+    }
+    .catalog-search-wrap .kbd-hint {
+      position: absolute;
+      right: 6px;
+      font-size: 10px;
+      color: var(--text-muted);
+      background: #141c2b;
+      padding: 1px 4px;
+      border-radius: 3px;
+      border: 1px solid var(--border-subtle);
+    }
+
+    /* Test Request Panel (Collapsible inside left rail) */
+    .test-request-section {
+      border-bottom: 1px solid var(--border-subtle);
+      background: #0a0f18;
+    }
+    .test-request-toggle {
+      width: 100%;
+      background: transparent;
+      border: none;
+      border-radius: 0;
+      padding: 7px 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: var(--accent-cyan);
+      font-weight: 600;
+      font-size: 11.5px;
+    }
+    .test-request-toggle:hover {
+      background: #101726;
+    }
+    .test-request-body {
+      padding: 8px 10px 10px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .test-request-body.hidden {
+      display: none;
+    }
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .form-group label {
+      font-size: 10.5px;
+      color: var(--text-secondary);
+      font-weight: 500;
+    }
+    .test-request-body textarea {
+      resize: vertical;
+      min-height: 48px;
+      font-size: 11.5px;
+      font-family: var(--font-mono);
+      line-height: 1.35;
+    }
+
+    /* Catalog Tree */
+    .catalog-tree-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px 0;
+    }
+
+    .catalog-pkg-group {
+      margin-bottom: 2px;
+    }
+    .pkg-header-row {
+      display: flex;
+      align-items: center;
+      padding: 4px 10px 4px 6px;
+      cursor: pointer;
+      color: var(--text-secondary);
+      font-size: 11.5px;
+      font-weight: 600;
+      gap: 4px;
+    }
+    .pkg-header-row:hover {
+      background: var(--bg-surface);
+      color: #fff;
+    }
+    .pkg-toggle-arrow {
+      width: 16px;
+      height: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 9px;
+      color: var(--text-muted);
+      transition: transform 0.15s ease;
+    }
+    .pkg-toggle-arrow.expanded {
+      transform: rotate(90deg);
+    }
+    .pkg-checkbox {
+      margin-right: 4px;
+      cursor: pointer;
+      accent-color: var(--accent-cyan);
+    }
+    .pkg-name {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: var(--font-mono);
+      font-size: 11px;
+    }
+    .pkg-count-badge {
+      font-size: 10px;
+      color: var(--text-muted);
+    }
+
+    .pkg-children {
+      padding-left: 20px;
+    }
+    .pkg-children.hidden {
+      display: none;
+    }
+
+    .fn-leaf-row {
+      display: flex;
+      align-items: center;
+      padding: 3px 8px 3px 6px;
+      font-size: 11.5px;
+      font-family: var(--font-mono);
+      color: var(--text-secondary);
+      gap: 6px;
+      cursor: pointer;
+      border-radius: 3px;
+      margin: 1px 6px 1px 0;
+    }
+    .fn-leaf-row:hover {
+      background: var(--bg-surface-hover);
+      color: #fff;
+    }
+    .fn-leaf-row input[type="checkbox"] {
+      cursor: pointer;
+      accent-color: var(--accent-cyan);
+    }
+    .fn-leaf-name {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .fn-leaf-row.ai-fn .fn-leaf-name {
+      color: #d8b4fe;
+    }
+
+    .catalog-footer {
+      padding: 8px 10px;
+      border-top: 1px solid var(--border-subtle);
+      background: var(--bg-panel);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+    }
+    .catalog-stat {
+      font-size: 11px;
+      color: var(--text-secondary);
+      font-family: var(--font-mono);
+    }
+    .catalog-actions {
+      display: flex;
+      gap: 4px;
+    }
+
+    /* --------------------------------------------------------------------------
+       REGION 2: LIVE TERMINAL STREAM (CENTER)
+       -------------------------------------------------------------------------- */
+    main.stream-pane {
+      flex: 1;
+      background: var(--bg-root);
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      overflow: hidden;
+      min-width: 320px;
+    }
+
+    .stream-header-bar {
+      height: 30px;
+      background: #0a0f17;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      font-size: 11px;
+      color: var(--text-secondary);
+      font-family: var(--font-mono);
+    }
+    .stream-header-info {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .stream-scroll-container {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 8px 10px 40px 10px;
+      font-family: var(--font-mono);
+      position: relative;
+    }
+
+    /* Empty state */
+    .stream-empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 75%;
+      color: var(--text-muted);
+      text-align: center;
+      gap: 12px;
+      padding: 20px;
+    }
+    .stream-empty-state .empty-icon {
+      font-size: 32px;
+      color: var(--accent-cyan);
+      opacity: 0.6;
+    }
+    .stream-empty-state h3 {
+      font-size: 15px;
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+    .stream-empty-state p {
+      max-width: 440px;
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--text-secondary);
+    }
+
+    /* Floating Jump to latest button */
+    .jump-latest-pill {
+      position: absolute;
+      bottom: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #0f3d24;
+      color: #d6ffe4;
+      border: 1px solid var(--accent-emerald);
+      padding: 5px 12px;
+      border-radius: 20px;
+      font-size: 11.5px;
+      font-weight: 600;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      z-index: 25;
+      animation: bounce 1.8s infinite;
+      transition: all 0.2s;
+    }
+    .jump-latest-pill:hover {
+      background: #1d4ed8;
+      transform: translateX(-50%) translateY(-2px);
+    }
+    .jump-latest-pill.hidden {
+      display: none;
+    }
+    @keyframes bounce {
+      0%, 100% { transform: translateX(-50%) translateY(0); }
+      50% { transform: translateX(-50%) translateY(-4px); }
+    }
+
+    /* Stream Entries */
+    .stream-group {
+      margin-bottom: 10px;
+      border-radius: 6px;
+      background: rgba(17, 24, 39, 0.4);
+      border: 1px solid rgba(30, 41, 59, 0.6);
+      border-left: 3px solid var(--accent-blue);
+      overflow: hidden;
+      transition: border-color 0.15s ease;
+    }
+    .stream-group:hover {
+      border-color: rgba(59, 130, 246, 0.4);
+    }
+
+    /* Request Header row */
+    .req-start-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 10px;
+      background: rgba(22, 31, 48, 0.65);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .req-start-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      overflow: hidden;
+    }
+    .req-method {
+      font-weight: 700;
+      font-size: 11px;
+      padding: 1px 5px;
+      border-radius: 3px;
+      background: #1e3a8a;
+      color: #93c5fd;
+    }
+    .req-method.method-GET { background: #064e3b; color: #6ee7b7; }
+    .req-method.method-POST { background: #1e3a8a; color: #93c5fd; }
+    .req-method.method-PUT { background: #78350f; color: #fde68a; }
+    .req-method.method-DELETE { background: #7f1d1d; color: #fca5a5; }
+
+    .req-path {
+      color: #fff;
+      font-weight: 600;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .req-summary {
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+    .req-start-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+
+    .spinner-icon {
+      width: 12px;
+      height: 12px;
+      border: 2px solid rgba(56, 189, 248, 0.2);
+      border-top-color: var(--accent-cyan);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Request End row */
+    .req-end-row {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      padding: 4px 10px;
+      background: rgba(18, 25, 38, 0.4);
+      border-top: 1px solid rgba(255, 255, 255, 0.03);
+      font-size: 11px;
+      color: var(--text-secondary);
+      gap: 8px;
+    }
+
+    /* Individual event rows */
+    .stream-row {
+      display: flex;
+      align-items: center;
+      padding: 3px 8px;
+      font-size: 12px;
+      line-height: 1.4;
+      cursor: pointer;
+      position: relative;
+      transition: background 0.1s ease;
+      min-height: 25px;
+    }
+    .stream-row:hover {
+      background: rgba(30, 41, 59, 0.5);
+    }
+    .stream-row.selected {
+      background: rgba(30, 58, 102, 0.45) !important;
+      outline: 1px solid var(--border-highlight);
+    }
+
+    /* Tree indentation & guide lines */
+    .tree-guide-indent {
+      display: inline-flex;
+      align-items: center;
+      height: 100%;
+      flex-shrink: 0;
+    }
+    .tree-segment {
+      width: 18px;
+      height: 100%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }
+    .tree-segment::before {
+      content: '';
+      position: absolute;
+      left: 8px;
+      top: 0;
+      bottom: 0;
+      width: 1px;
+      background: rgba(71, 85, 105, 0.35);
+    }
+    .tree-branch {
+      color: var(--text-muted);
+      margin-right: 4px;
+      font-size: 11px;
+    }
+
+    .row-content {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .fn-name-label {
+      font-weight: 500;
+      color: var(--accent-cyan);
+      white-space: nowrap;
+    }
+    .fn-args-preview {
+      color: var(--text-muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 11px;
+      flex: 1;
+    }
+    .fn-result-preview {
+      color: #64748b;
+      font-size: 11px;
+      margin-left: 4px;
+    }
+
+    /* fn.error row */
+    .stream-row.row-error {
+      background: rgba(248, 113, 113, 0.08);
+      border-left: 2px solid var(--accent-rose);
+    }
+    .stream-row.row-error:hover {
+      background: rgba(248, 113, 113, 0.14);
+    }
+    .stream-row.row-error .fn-name-label {
+      color: var(--accent-rose);
+    }
+
+    /* llm.call row */
+    .stream-row.row-llm {
+      background: rgba(192, 132, 252, 0.06);
+      border-left: 2px solid var(--accent-violet);
+    }
+    .stream-row.row-llm:hover {
+      background: rgba(192, 132, 252, 0.12);
+    }
+    .stream-row.row-llm .fn-name-label {
+      color: var(--accent-violet);
+    }
+
+    /* log row */
+    .stream-row.row-log {
+      color: #64748b;
+      font-size: 11px;
+      min-height: 20px;
+      padding: 1px 8px;
+    }
+    .stream-row.row-log .log-level {
+      font-size: 9.5px;
+      padding: 0 4px;
+      border-radius: 2px;
+      margin-right: 4px;
+      font-weight: 700;
+    }
+    .log-level.lvl-info { color: #60a5fa; background: rgba(96, 165, 250, 0.1); }
+    .log-level.lvl-warn { color: #fbbf24; background: rgba(251, 191, 36, 0.1); }
+    .log-level.lvl-error { color: #f87171; background: rgba(248, 113, 113, 0.1); }
+    .log-level.lvl-debug { color: #94a3b8; background: rgba(148, 163, 184, 0.1); }
+
+    .row-meta-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: auto;
+      flex-shrink: 0;
+    }
+
+    /* --------------------------------------------------------------------------
+       REGION 3: INSPECTOR PANE (RIGHT)
+       -------------------------------------------------------------------------- */
+    aside.inspector-pane {
+      width: var(--inspector-w);
+      min-width: var(--inspector-w);
+      background: var(--bg-panel);
+      border-left: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      z-index: 40;
+      transition: width 0.2s ease, min-width 0.2s ease, margin-right 0.2s ease;
+      box-shadow: -6px 0 20px rgba(0, 0, 0, 0.4);
+    }
+    aside.inspector-pane.hidden {
+      margin-right: calc(-1 * var(--inspector-w));
+    }
+
+    .inspector-header {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border-subtle);
+      background: #0f1624;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .inspector-top-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .inspector-title-wrap {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .inspector-kind-badge {
+      font-size: 10px;
+      text-transform: uppercase;
+    }
+
+    /* Breadcrumbs */
+    .breadcrumbs-bar {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 4px;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+    }
+    .breadcrumb-item {
+      color: var(--accent-cyan);
+      cursor: pointer;
+      text-decoration: none;
+      padding: 1px 4px;
+      border-radius: 3px;
+    }
+    .breadcrumb-item:hover {
+      background: #1e293e;
+      color: #fff;
+    }
+    .breadcrumb-item.current {
+      color: #fff;
+      font-weight: 600;
+      cursor: default;
+      background: rgba(255, 255, 255, 0.05);
+    }
+    .breadcrumb-sep {
+      color: var(--text-dim);
+    }
+
+    .inspector-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    /* Timing Comparison Bar */
+    .timing-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      padding: 9px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .timing-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+    .timing-meter {
+      height: 6px;
+      background: #1a2332;
+      border-radius: 3px;
+      overflow: hidden;
+      display: flex;
+    }
+    .timing-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #1f5a2e, var(--accent-emerald));
+      border-radius: 3px;
+      transition: width 0.3s ease;
+    }
+    .timing-bar-fill.llm {
+      background: linear-gradient(90deg, #c084fc, #ec4899);
+    }
+
+    /* Function Signature & Qualname Box */
+    .fn-meta-box {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .fn-qualname {
+      font-size: 13px;
+      font-weight: 600;
+      color: #fff;
+      font-family: var(--font-mono);
+      word-break: break-all;
+    }
+    .fn-module-path {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+    .fn-sig-code {
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      background: var(--bg-code);
+      padding: 6px 8px;
+      border-radius: 4px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      color: #93c5fd;
+      overflow-x: auto;
+      white-space: pre-wrap;
+    }
+    .fn-docstring {
+      font-size: 11px;
+      color: var(--text-secondary);
+      font-style: italic;
+      line-height: 1.4;
+      border-left: 2px solid var(--border-strong);
+      padding-left: 8px;
+      margin-top: 4px;
+    }
+
+    /* IO Section Cards (Input / Output) */
+    .io-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .io-card-header {
+      padding: 7px 12px;
+      background: #141c2c;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.4px;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+    }
+    .io-card-content {
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    /* JSON code block & tree */
+    .json-code-box {
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      background: var(--bg-code);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 4px;
+      padding: 8px 10px;
+      overflow-x: auto;
+      max-height: 280px;
+      white-space: pre-wrap;
+      word-break: break-all;
+      color: #e2e8f0;
+      line-height: 1.45;
+    }
+    .json-key { color: #38bdf8; }
+    .json-str { color: #a7f3d0; }
+    .json-num { color: #fde047; }
+    .json-bool { color: #f472b6; }
+    .json-null { color: #94a3b8; }
+
+    .truncation-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(251, 191, 36, 0.08);
+      border: 1px solid rgba(251, 191, 36, 0.25);
+      padding: 6px 10px;
+      border-radius: 4px;
+      font-size: 11px;
+      color: var(--accent-amber);
+    }
+
+    /* Traceback Box */
+    .traceback-box {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      background: #160b0e;
+      border: 1px solid rgba(248, 113, 113, 0.3);
+      border-radius: 4px;
+      padding: 10px;
+      color: #fca5a5;
+      overflow-x: auto;
+      max-height: 320px;
+      white-space: pre-wrap;
+      line-height: 1.4;
+    }
+
+    /* LLM Mode Chat Transcript */
+    .llm-transcript-box {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .chat-bubble {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      border-radius: 6px;
+      padding: 8px 10px;
+      border: 1px solid var(--border-subtle);
+      background: #0d131e;
+    }
+    .chat-bubble.role-system {
+      background: #101622;
+      border-color: #243044;
+    }
+    .chat-bubble.role-user {
+      background: #0f1c30;
+      border-color: #1e3a5f;
+    }
+    .chat-bubble.role-assistant {
+      background: #1a1329;
+      border-color: #3b245a;
+    }
+    .chat-bubble-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 10.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .chat-bubble.role-system .chat-bubble-header { color: #94a3b8; }
+    .chat-bubble.role-user .chat-bubble-header { color: #60a5fa; }
+    .chat-bubble.role-assistant .chat-bubble-header { color: #c084fc; }
+    
+    .chat-bubble-content {
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      color: #f1f5f9;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.4;
+    }
+
+    /* LLM Output Tabs */
+    .tab-bar {
+      display: flex;
+      border-bottom: 1px solid var(--border-subtle);
+      gap: 2px;
+      margin-bottom: 8px;
+    }
+    .tab-btn {
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      border-radius: 0;
+      padding: 6px 12px;
+      color: var(--text-secondary);
+      font-size: 11.5px;
+    }
+    .tab-btn.active {
+      color: var(--accent-violet);
+      border-bottom-color: var(--accent-violet);
+      font-weight: 600;
+      background: rgba(192, 132, 252, 0.05);
+    }
+
+    /* Keyboard Shortcuts Modal */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(3px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+    .modal-overlay.hidden { display: none; }
+    .modal-card {
+      background: var(--bg-panel);
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      width: 440px;
+      max-width: 90vw;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7);
+      overflow: hidden;
+    }
+    .modal-header {
+      padding: 10px 14px;
+      background: #141c2c;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-weight: 600;
+    }
+    .modal-body {
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .shortcut-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 4px 0;
+      font-size: 12px;
+    }
+    kbd {
+      background: #1a2436;
+      border: 1px solid var(--border-subtle);
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--accent-cyan);
+    }
+
+    /* Toast Notification */
+    .toast-pill {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: #1e293b;
+      border: 1px solid var(--border-highlight);
+      color: #fff;
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 12px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      z-index: 200;
+      transform: translateY(50px);
+      opacity: 0;
+      transition: all 0.2s ease;
+      pointer-events: none;
+    }
+    .toast-pill.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+
+<div id="app">
+  <!-- TOP TOOLBAR -->
+  <header class="app-toolbar">
+    <div class="toolbar-left">
+      <button id="btn-toggle-catalog" class="btn-icon" title="Toggle Function Catalog Rail (Ctrl+B)">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h18v18H3zM9 3v18"/></svg>
+      </button>
+
+      <div class="app-brand">
+        <span class="brain-icon">🧠</span>
+        <span>Brain Terminal</span>
+        <span class="brand-tag">v2.0-fastapi</span>
+      </div>
+
+      <div class="toolbar-actions">
+        <button id="btn-clear-stream" title="Clear Stream (C)" class="btn-sm">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          Clear (C)
+        </button>
+
+        <button id="btn-pause-stream" class="btn-sm" title="Pause/Resume Stream (Space)">
+          <span id="pause-icon">⏸</span>
+          <span id="pause-text">Pause</span>
+        </button>
+
+        <!-- Verbosity Toggle -->
+        <div class="verbosity-segmented" title="Trace Verbosity Filter">
+          <button id="verb-selected" class="verbosity-btn active" data-level="selected">Selected Only</button>
+          <button id="verb-all" class="verbosity-btn" data-level="all">All Traced</button>
+        </div>
+
+        <!-- Filter by Request ID / Search -->
+        <div class="search-filter-box">
+          <svg class="search-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input type="text" id="stream-filter-input" placeholder="Filter request_id or text..." />
+        </div>
+
+        <button id="btn-test-panel" class="btn-sm" title="Send Test Request">
+          <span style="color: var(--accent-cyan)">⚡</span> Send Test
+        </button>
+      </div>
+    </div>
+
+    <div class="toolbar-right">
+      <!-- Connection Status -->
+      <div id="connection-status-pill" class="status-pill" title="WebSocket Connection Status">
+        <span id="connection-dot" class="status-dot"></span>
+        <span id="connection-label">Connecting...</span>
+      </div>
+
+      <!-- Live / Mock Toggle -->
+      <div class="mode-switch-pill" title="Toggle between real WebSocket and offline demo simulation">
+        <button id="mode-btn-live" class="mode-btn active">Live WS</button>
+        <button id="mode-btn-mock" class="mode-btn">Mock Mode</button>
+      </div>
+
+      <button id="btn-shortcuts" class="btn-sm btn-icon" title="Keyboard Shortcuts (?)">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- 3-PANE WORKSPACE BODY -->
+  <div class="workspace-body">
+    
+    <!-- REGION 1: FUNCTION CATALOG (LEFT) -->
+    <aside id="catalog-pane" class="catalog-pane">
+      <div class="catalog-header">
+        <div class="catalog-title-row">
+          <span class="catalog-title">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            Function Catalog
+          </span>
+          <span id="catalog-total-badge" class="badge badge-dim">0</span>
+        </div>
+        
+        <div class="catalog-search-wrap">
+          <svg class="search-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input type="text" id="catalog-search-input" placeholder="Search functions (/)..." />
+          <span class="kbd-hint">/</span>
+        </div>
+      </div>
+
+      <!-- Test Request Drawer -->
+      <div class="test-request-section">
+        <button id="test-drawer-toggle" class="test-request-toggle">
+          <span>⚡ Send Test Request</span>
+          <span id="test-drawer-arrow">▾</span>
+        </button>
+        <div id="test-drawer-body" class="test-request-body hidden">
+          <div class="form-group">
+            <label>Domain</label>
+            <select id="test-domain-select">
+              <option value="quotation">quotation</option>
+              <option value="execution">execution</option>
+              <option value="quotation_edit">quotation_edit</option>
+              <option value="extraction">extraction</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Session ID (optional)</label>
+            <input type="text" id="test-session-id" placeholder="e.g. sess_abc123" />
+          </div>
+          <div class="form-group">
+            <label>Message / Prompt</label>
+            <textarea id="test-message" placeholder="Type input payload or prompt..."></textarea>
+          </div>
+          <button id="btn-submit-test" class="btn-primary" style="margin-top: 4px; justify-content: center;">
+            Run Test Pipeline
+          </button>
+        </div>
+      </div>
+
+      <!-- Function Tree -->
+      <div id="catalog-tree" class="catalog-tree-container">
+        <!-- Injected dynamically by JS -->
+      </div>
+
+      <!-- Catalog Footer -->
+      <div class="catalog-footer">
+        <span id="catalog-selection-stat" class="catalog-stat">0 of 0 selected</span>
+        <div class="catalog-actions">
+          <button id="btn-select-all" class="btn-sm">All</button>
+          <button id="btn-select-none" class="btn-sm">None</button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- REGION 2: LIVE TERMINAL STREAM (CENTER) -->
+    <main class="stream-pane">
+      <div class="stream-header-bar">
+        <div class="stream-header-info">
+          <span>LIVE TRACE STREAM</span>
+          <span id="stream-active-reqs" style="color: var(--accent-emerald);">● 0 active requests</span>
+          <span id="stream-total-events">0 events</span>
+        </div>
+        <div>
+          <span id="stream-autoscroll-status" style="color: var(--accent-cyan); font-size: 10.5px;">Auto-scroll: ON</span>
+        </div>
+      </div>
+
+      <div id="stream-scroll-container" class="stream-scroll-container">
+        <!-- Empty State -->
+        <div id="stream-empty-state" class="stream-empty-state">
+          <div class="empty-icon">⚡</div>
+          <h3>Waiting for backend traces...</h3>
+          <p>Connected to FastAPI streaming WebSocket. Make HTTP requests to the backend or trigger a test request to watch execution flow in real-time.</p>
+          <div style="display: flex; gap: 8px; margin-top: 6px;">
+            <button id="empty-btn-test" class="btn-primary">Send Test Request</button>
+            <button id="empty-btn-mock" class="btn-sm">Switch to Mock Mode</button>
+          </div>
+        </div>
+
+        <!-- Groups and Event rows appended here -->
+        <div id="stream-entries-container"></div>
+      </div>
+
+      <!-- Jump to latest pill -->
+      <button id="jump-latest-btn" class="jump-latest-pill hidden">
+        <span>↓ Jump to latest</span>
+        <span id="jump-unread-count" class="badge badge-dim" style="background: rgba(0,0,0,0.4); color: #fff;">0</span>
+      </button>
+    </main>
+
+    <!-- REGION 3: INSPECTOR PANE (RIGHT) -->
+    <aside id="inspector-pane" class="inspector-pane hidden">
+      <div class="inspector-header">
+        <div class="inspector-top-bar">
+          <div class="inspector-title-wrap">
+            <span id="inspector-kind-badge" class="badge badge-cyan">FUNCTION CALL</span>
+            <span id="inspector-span-id" class="badge badge-dim" style="cursor: pointer;" title="Click to copy span_id">sp_0</span>
+          </div>
+          <button id="btn-close-inspector" class="btn-icon" title="Close Inspector (Esc)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+
+        <!-- Breadcrumb ancestry trail -->
+        <div id="inspector-breadcrumbs" class="breadcrumbs-bar">
+          <!-- Injected dynamically -->
+        </div>
+      </div>
+
+      <div class="inspector-body">
+        <!-- Timing Analysis Card -->
+        <div class="timing-card">
+          <div class="timing-card-header">
+            <span>Execution Duration</span>
+            <span id="inspector-timing-text" style="font-weight: 600; font-family: var(--font-mono); color: #fff;">184ms</span>
+          </div>
+          <div class="timing-meter">
+            <div id="inspector-timing-fill" class="timing-bar-fill" style="width: 50%;"></div>
+          </div>
+          <div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted);">
+            <span id="inspector-timing-sub">Span time vs parent request</span>
+            <span id="inspector-timing-pct">100%</span>
+          </div>
+        </div>
+
+        <!-- Function Signature / Metadata Box (for fn.*) -->
+        <div id="inspector-fn-meta" class="fn-meta-box">
+          <div id="inspector-fn-name" class="fn-qualname">_process_chunk</div>
+          <div id="inspector-fn-module" class="fn-module-path">app.quotation.extraction.pipeline</div>
+          <div id="inspector-fn-sig" class="fn-sig-code">(chunk, *, ontology, domain)</div>
+          <div id="inspector-fn-doc" class="fn-docstring">Processes a single chunk of raw quotation text into structured entities.</div>
+        </div>
+
+        <!-- LLM Metadata Card (for llm.call) -->
+        <div id="inspector-llm-meta" class="fn-meta-box hidden" style="border-color: rgba(192, 132, 252, 0.3);">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span id="inspector-llm-model" class="badge badge-llm">gpt-4o</span>
+            <span id="inspector-llm-label" class="badge badge-dim">structuring</span>
+          </div>
+          <div id="inspector-llm-tokens" style="font-size: 11px; font-family: var(--font-mono); color: var(--text-secondary); margin-top: 4px;">
+            Tokens: <strong>1,200</strong> in · <strong>340</strong> out · <strong>1,540</strong> total
+          </div>
+        </div>
+
+        <!-- Dynamic Container for Function Mode vs LLM Mode vs Error Mode -->
+        <div id="inspector-dynamic-content" style="display: flex; flex-direction: column; gap: 12px;">
+          <!-- Injected dynamically -->
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<!-- KEYBOARD SHORTCUTS MODAL -->
+<div id="shortcuts-modal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <div class="modal-header">
+      <span>Keyboard Shortcuts</span>
+      <button id="btn-close-modal" class="btn-sm btn-icon">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="shortcut-row"><span>Focus Catalog Search</span><kbd>/</kbd></div>
+      <div class="shortcut-row"><span>Close Inspector / Modal</span><kbd>Esc</kbd></div>
+      <div class="shortcut-row"><span>Move Selection Down</span><kbd>j</kbd> or <kbd>↓</kbd></div>
+      <div class="shortcut-row"><span>Move Selection Up</span><kbd>k</kbd> or <kbd>↑</kbd></div>
+      <div class="shortcut-row"><span>Clear Stream</span><kbd>c</kbd></div>
+      <div class="shortcut-row"><span>Pause / Resume Stream</span><kbd>Space</kbd></div>
+      <div class="shortcut-row"><span>Toggle Left Catalog Rail</span><kbd>Ctrl+B</kbd></div>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST NOTIFICATION -->
+<div id="toast-pill" class="toast-pill">Copied to clipboard!</div>
+
+<!-- ==========================================================================
+     FRONTEND JAVASCRIPT ENGINE
+     ========================================================================== -->
+<script>
+(() => {
+  'use strict';
+
+  /* --------------------------------------------------------------------------
+     STATE MANAGEMENT
+     -------------------------------------------------------------------------- */
+  const state = {
+    // Mode
+    isMockMode: false,
+    wsConnected: false,
+    wsReconnecting: false,
+    reconnectTimer: null,
+    reconnectDelay: 1000,
+    verbosity: 'selected', // 'selected' | 'all'
+    isStreamPaused: false,
+    filterQuery: '',
+    
+    // Function Catalog
+    catalog: { groups: [] },
+    selectedFunctions: new Set(),
+    catalogSearchQuery: '',
+    collapsedPackages: new Set(),
+
+    // Stream & Traces
+    events: [],           // All raw events
+    eventsBySeq: new Map(),
+    requests: new Map(),  // req_id -> { startEvent, endEvent, spans: Map(span_id -> { start, end, ... }), groupElem }
+    spans: new Map(),     // span_id -> SpanData
+    selectedSpanId: null,
+    focusedIndex: -1,     // For j/k keyboard navigation
+    
+    // Auto-scroll
+    autoScroll: true,
+    unreadWhileScrolledUp: 0,
+
+    // LLM Inspector active tab
+    llmActiveTab: 'parsed', // 'raw' | 'parsed'
+  };
+
+  /* --------------------------------------------------------------------------
+     DOM ELEMENT REFERENCES
+     -------------------------------------------------------------------------- */
+  const el = {
+    btnToggleCatalog: document.getElementById('btn-toggle-catalog'),
+    catalogPane: document.getElementById('catalog-pane'),
+    catalogSearchInput: document.getElementById('catalog-search-input'),
+    catalogTree: document.getElementById('catalog-tree'),
+    catalogTotalBadge: document.getElementById('catalog-total-badge'),
+    catalogSelectionStat: document.getElementById('catalog-selection-stat'),
+    btnSelectAll: document.getElementById('btn-select-all'),
+    btnSelectNone: document.getElementById('btn-select-none'),
+    
+    testDrawerToggle: document.getElementById('test-drawer-toggle'),
+    testDrawerBody: document.getElementById('test-drawer-body'),
+    testDomainSelect: document.getElementById('test-domain-select'),
+    testSessionId: document.getElementById('test-session-id'),
+    testMessage: document.getElementById('test-message'),
+    btnSubmitTest: document.getElementById('btn-submit-test'),
+    btnTestPanel: document.getElementById('btn-test-panel'),
+    emptyBtnTest: document.getElementById('empty-btn-test'),
+    emptyBtnMock: document.getElementById('empty-btn-mock'),
+
+    btnClearStream: document.getElementById('btn-clear-stream'),
+    btnPauseStream: document.getElementById('btn-pause-stream'),
+    pauseIcon: document.getElementById('pause-icon'),
+    pauseText: document.getElementById('pause-text'),
+    verbSelected: document.getElementById('verb-selected'),
+    verbAll: document.getElementById('verb-all'),
+    streamFilterInput: document.getElementById('stream-filter-input'),
+    
+    connectionStatusPill: document.getElementById('connection-status-pill'),
+    connectionDot: document.getElementById('connection-dot'),
+    connectionLabel: document.getElementById('connection-label'),
+    modeBtnLive: document.getElementById('mode-btn-live'),
+    modeBtnMock: document.getElementById('mode-btn-mock'),
+    
+    streamScrollContainer: document.getElementById('stream-scroll-container'),
+    streamEntriesContainer: document.getElementById('stream-entries-container'),
+    streamEmptyState: document.getElementById('stream-empty-state'),
+    streamActiveReqs: document.getElementById('stream-active-reqs'),
+    streamTotalEvents: document.getElementById('stream-total-events'),
+    streamAutoscrollStatus: document.getElementById('stream-autoscroll-status'),
+    jumpLatestBtn: document.getElementById('jump-latest-btn'),
+    jumpUnreadCount: document.getElementById('jump-unread-count'),
+
+    inspectorPane: document.getElementById('inspector-pane'),
+    btnCloseInspector: document.getElementById('btn-close-inspector'),
+    inspectorKindBadge: document.getElementById('inspector-kind-badge'),
+    inspectorSpanId: document.getElementById('inspector-span-id'),
+    inspectorBreadcrumbs: document.getElementById('inspector-breadcrumbs'),
+    inspectorTimingText: document.getElementById('inspector-timing-text'),
+    inspectorTimingFill: document.getElementById('inspector-timing-fill'),
+    inspectorTimingSub: document.getElementById('inspector-timing-sub'),
+    inspectorTimingPct: document.getElementById('inspector-timing-pct'),
+    inspectorFnMeta: document.getElementById('inspector-fn-meta'),
+    inspectorFnName: document.getElementById('inspector-fn-name'),
+    inspectorFnModule: document.getElementById('inspector-fn-module'),
+    inspectorFnSig: document.getElementById('inspector-fn-sig'),
+    inspectorFnDoc: document.getElementById('inspector-fn-doc'),
+    inspectorLlmMeta: document.getElementById('inspector-llm-meta'),
+    inspectorLlmModel: document.getElementById('inspector-llm-model'),
+    inspectorLlmLabel: document.getElementById('inspector-llm-label'),
+    inspectorLlmTokens: document.getElementById('inspector-llm-tokens'),
+    inspectorDynamicContent: document.getElementById('inspector-dynamic-content'),
+
+    shortcutsModal: document.getElementById('shortcuts-modal'),
+    btnShortcuts: document.getElementById('btn-shortcuts'),
+    btnCloseModal: document.getElementById('btn-close-modal'),
+    toastPill: document.getElementById('toast-pill'),
+  };
+
+  /* --------------------------------------------------------------------------
+     DEFAULT / MOCK CATALOG
+     -------------------------------------------------------------------------- */
+  const DEFAULT_CATALOG = {
+    groups: [
+      {
+        package: "quotation.extraction",
+        functions: [
+          { id: "app.quotation.extraction.pipeline:run_pipeline", name: "run_pipeline", signature: "(raw_text: str, *, domain: str)", doc: "Executes the multi-stage extraction pipeline over raw text." },
+          { id: "app.quotation.extraction.pipeline:_process_chunk", name: "_process_chunk", signature: "(chunk: str, *, ontology: dict, domain: str)", doc: "Processes an isolated segment and maps it to domain entities." },
+          { id: "app.quotation.extraction.parser:extract_entities", name: "extract_entities", signature: "(text: str, schema: dict)", doc: "Invokes LLM extraction with JSON schema validation." },
+          { id: "app.quotation.extraction.normalizer:normalize_items", name: "normalize_items", signature: "(items: list[dict]) -> list[dict]", doc: "Standardizes extracted pricing line items and quantities." },
+          { id: "app.quotation.extraction.validator:validate_schema", name: "validate_schema", signature: "(payload: dict, target_model: str)", doc: "Strict validation against Pydantic domain models." }
+        ]
+      },
+      {
+        package: "quotation.graph",
+        functions: [
+          { id: "app.quotation.graph.builder:build_quotation_graph", name: "build_quotation_graph", signature: "(quotation_id: str, nodes: list)", doc: "Constructs DAG dependency graph for pricing calculations." },
+          { id: "app.quotation.graph.resolver:resolve_dependencies", name: "resolve_dependencies", signature: "(graph: DAG)", doc: "Resolves formula references and ordering constraints." },
+          { id: "app.quotation.graph.calculator:calculate_totals", name: "calculate_totals", signature: "(graph: DAG, context: dict)", doc: "Computes subtotal, taxes, volume discounts, and grand total." },
+          { id: "app.quotation.graph.commit:commit_graph", name: "commit_graph", signature: "(quotation_id: str, db_session)", doc: "Atomically commits quotation graph revision to DB." }
+        ]
+      },
+      {
+        package: "execution.chat",
+        functions: [
+          { id: "app.execution.chat.engine:execute_chat", name: "execute_chat", signature: "(session_id: str, prompt: str)", doc: "Entry point for conversational reasoning and function dispatch." },
+          { id: "app.execution.chat.context:retrieve_context", name: "retrieve_context", signature: "(session_id: str, top_k: int = 5)", doc: "Retrieves conversation history and semantic vector memories." },
+          { id: "app.execution.chat.formatter:format_response", name: "format_response", signature: "(result: dict, style: str = 'rich')", doc: "Formats agent action output into streaming chunks." }
+        ]
+      },
+      {
+        package: "core.llm",
+        functions: [
+          { id: "app.core.llm.client:call_model", name: "call_model", signature: "(messages: list, model: str, temperature: float = 0.0)", doc: "Direct gateway to LLM providers with automatic fallback." },
+          { id: "app.core.llm.structurer:structure_output", name: "structure_output", signature: "(raw_response: str, target_schema: type)", doc: "Parses model completions into strongly-typed Pydantic classes." },
+          { id: "app.core.llm.tokenizer:tokenize_prompt", name: "tokenize_prompt", signature: "(messages: list) -> int", doc: "Calculates exact token budgets and context window limits." }
+        ]
+      }
+    ]
+  };
+
+  /* --------------------------------------------------------------------------
+     WEBSOCKET CONNECTION & NETWORKING
+     -------------------------------------------------------------------------- */
+  let socket = null;
+
+  function getWsUrl() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.host || '127.0.0.1:8765';
+    return `${protocol}//${host}/viewer/terminal/ws`;
+  }
+
+  function initWebSocket() {
+    if (state.isMockMode) return;
+    
+    if (socket) {
+      try { socket.close(); } catch (e) {}
+      socket = null;
+    }
+
+    updateConnectionUI('connecting', 'Connecting...');
+    const wsUrl = getWsUrl();
+
+    try {
+      socket = new WebSocket(wsUrl);
+    } catch (err) {
+      console.warn('WS instantiate error:', err);
+      scheduleReconnect();
+      return;
+    }
+
+    socket.onopen = () => {
+      state.wsConnected = true;
+      state.wsReconnecting = false;
+      state.reconnectDelay = 1000;
+      updateConnectionUI('connected', 'Connected');
+      showToast('WebSocket connected to live backend');
+      
+      // Resend selection and verbosity upon connect/reconnect
+      sendClientMessage({
+        op: 'select',
+        functions: Array.from(state.selectedFunctions)
+      });
+      sendClientMessage({
+        op: 'set_verbosity',
+        level: state.verbosity
+      });
+    };
+
+    socket.onmessage = (evt) => {
+      try {
+        const msg = JSON.parse(evt.data);
+        handleIncomingMessage(msg);
+      } catch (err) {
+        console.error('Failed to parse WS JSON:', err, evt.data);
+      }
+    };
+
+    socket.onclose = () => {
+      state.wsConnected = false;
+      if (!state.isMockMode) {
+        scheduleReconnect();
+      }
+    };
+
+    socket.onerror = (err) => {
+      console.warn('WS error event:', err);
+      state.wsConnected = false;
+      updateConnectionUI('down', 'Connection Error');
+    };
+  }
+
+  function scheduleReconnect() {
+    if (state.isMockMode || state.wsReconnecting) return;
+    state.wsReconnecting = true;
+    updateConnectionUI('reconnecting', `Reconnecting (${Math.round(state.reconnectDelay/1000)}s)...`);
+    
+    clearTimeout(state.reconnectTimer);
+    state.reconnectTimer = setTimeout(() => {
+      state.wsReconnecting = false;
+      state.reconnectDelay = Math.min(state.reconnectDelay * 1.5, 12000);
+      initWebSocket();
+    }, state.reconnectDelay);
+  }
+
+  function sendClientMessage(msg) {
+    if (state.isMockMode) {
+      handleMockClientMessage(msg);
+      return;
+    }
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify(msg));
+    }
+  }
+
+  function updateConnectionUI(status, label) {
+    el.connectionDot.className = 'status-dot ' + status;
+    el.connectionLabel.textContent = label;
+    if (status === 'connected') {
+      el.connectionStatusPill.style.borderColor = 'rgba(52, 211, 153, 0.3)';
+    } else if (status === 'reconnecting') {
+      el.connectionStatusPill.style.borderColor = 'rgba(251, 191, 36, 0.3)';
+    } else if (status === 'mock') {
+      el.connectionStatusPill.style.borderColor = 'rgba(192, 132, 252, 0.4)';
+    } else {
+      el.connectionStatusPill.style.borderColor = 'rgba(248, 113, 113, 0.3)';
+    }
+  }
+
+  /* --------------------------------------------------------------------------
+     FETCH FUNCTION CATALOG
+     -------------------------------------------------------------------------- */
+  async function loadCatalog() {
+    try {
+      const resp = await fetch('/viewer/terminal/functions');
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data && data.groups && data.groups.length > 0) {
+          state.catalog = data;
+          renderCatalog();
+          return;
+        }
+      }
+    } catch (e) {
+      console.log('Using default catalog fixtures (offline or local mode).');
+    }
+    state.catalog = DEFAULT_CATALOG;
+    renderCatalog();
+  }
+
+  function renderCatalog() {
+    el.catalogTree.innerHTML = '';
+    let totalFunctions = 0;
+    const search = state.catalogSearchQuery.toLowerCase().trim();
+
+    // Select all functions by default if none selected yet
+    if (state.selectedFunctions.size === 0) {
+      state.catalog.groups.forEach(g => {
+        g.functions.forEach(f => state.selectedFunctions.add(f.id));
+      });
+    }
+
+    state.catalog.groups.forEach(group => {
+      const filteredFns = group.functions.filter(f => {
+        if (!search) return true;
+        return (
+          f.name.toLowerCase().includes(search) ||
+          f.id.toLowerCase().includes(search) ||
+          group.package.toLowerCase().includes(search)
+        );
+      });
+
+      if (filteredFns.length === 0 && search) return;
+      totalFunctions += group.functions.length;
+
+      const groupSelectedCount = group.functions.filter(f => state.selectedFunctions.has(f.id)).length;
+      const isAllGroupSelected = groupSelectedCount === group.functions.length;
+      const isSomeGroupSelected = groupSelectedCount > 0 && !isAllGroupSelected;
+      const isCollapsed = state.collapsedPackages.has(group.package);
+
+      const groupElem = document.createElement('div');
+      groupElem.className = 'catalog-pkg-group';
+
+      // Group Header
+      const headerRow = document.createElement('div');
+      headerRow.className = 'pkg-header-row';
+      headerRow.innerHTML = `
+        <span class="pkg-toggle-arrow ${isCollapsed ? '' : 'expanded'}">▶</span>
+        <input type="checkbox" class="pkg-checkbox" ${isAllGroupSelected ? 'checked' : ''} />
+        <span class="pkg-name" title="${escapeHtml(group.package)}">${escapeHtml(group.package)}</span>
+        <span class="pkg-count-badge">${groupSelectedCount}/${group.functions.length}</span>
+      `;
+
+      const pkgCheckbox = headerRow.querySelector('.pkg-checkbox');
+      pkgCheckbox.indeterminate = isSomeGroupSelected;
+
+      // Group Checkbox toggle
+      pkgCheckbox.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const shouldSelect = pkgCheckbox.checked;
+        group.functions.forEach(fn => {
+          if (shouldSelect) state.selectedFunctions.add(fn.id);
+          else state.selectedFunctions.delete(fn.id);
+        });
+        onSelectionChange();
+        renderCatalog();
+      });
+
+      // Arrow / Header toggle collapse
+      headerRow.addEventListener('click', () => {
+        if (state.collapsedPackages.has(group.package)) {
+          state.collapsedPackages.delete(group.package);
+        } else {
+          state.collapsedPackages.add(group.package);
+        }
+        renderCatalog();
+      });
+
+      groupElem.appendChild(headerRow);
+
+      // Children list
+      const childrenBox = document.createElement('div');
+      childrenBox.className = `pkg-children ${isCollapsed ? 'hidden' : ''}`;
+
+      filteredFns.forEach(fn => {
+        const isChecked = state.selectedFunctions.has(fn.id);
+        const isAi = group.package.includes('llm') || fn.name.includes('llm') || fn.name.includes('extract');
+        
+        const fnRow = document.createElement('div');
+        fnRow.className = `fn-leaf-row ${isAi ? 'ai-fn' : ''}`;
+        fnRow.title = `${fn.id}\n${fn.signature || ''}\n${fn.doc || ''}`;
+        fnRow.innerHTML = `
+          <input type="checkbox" ${isChecked ? 'checked' : ''} />
+          <span class="fn-leaf-name">${escapeHtml(fn.name)}</span>
+        `;
+
+        const leafCheckbox = fnRow.querySelector('input');
+        leafCheckbox.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (leafCheckbox.checked) {
+            state.selectedFunctions.add(fn.id);
+          } else {
+            state.selectedFunctions.delete(fn.id);
+          }
+          onSelectionChange();
+          renderCatalog();
+        });
+
+        fnRow.addEventListener('click', () => {
+          leafCheckbox.checked = !leafCheckbox.checked;
+          if (leafCheckbox.checked) state.selectedFunctions.add(fn.id);
+          else state.selectedFunctions.delete(fn.id);
+          onSelectionChange();
+          renderCatalog();
+        });
+
+        childrenBox.appendChild(fnRow);
+      });
+
+      groupElem.appendChild(childrenBox);
+      el.catalogTree.appendChild(groupElem);
+    });
+
+    // Update footer stats
+    el.catalogTotalBadge.textContent = totalFunctions;
+    el.catalogSelectionStat.textContent = `${state.selectedFunctions.size} of ${totalFunctions} selected`;
+  }
+
+  function onSelectionChange() {
+    sendClientMessage({
+      op: 'select',
+      functions: Array.from(state.selectedFunctions)
+    });
+  }
+
+  /* --------------------------------------------------------------------------
+     EVENT INGESTION & DISPATCH
+     -------------------------------------------------------------------------- */
+  function handleIncomingMessage(msg) {
+    // 1. Value replies for get_value
+    if (msg.kind === 'value') {
+      handleValueResponse(msg);
+      return;
+    }
+
+    // 2. Normal Trace Events
+    state.events.push(msg);
+    if (msg.seq != null) state.eventsBySeq.set(msg.seq, msg);
+
+    // Track requests & spans
+    const reqId = msg.request_id || 'unscoped';
+    let reqData = state.requests.get(reqId);
+    if (!reqData) {
+      reqData = {
+        id: reqId,
+        startEvent: null,
+        endEvent: null,
+        spans: new Map(),
+        groupElem: null,
+        entriesContainer: null,
+        statusElem: null,
+        spinnerElem: null,
+        durationElem: null
+      };
+      state.requests.set(reqId, reqData);
+    }
+
+    if (msg.span_id) {
+      let spanData = state.spans.get(msg.span_id);
+      if (!spanData) {
+        spanData = {
+          span_id: msg.span_id,
+          request_id: reqId,
+          parent_span_id: msg.parent_span_id || null,
+          depth: msg.depth || 0,
+          kind: msg.kind,
+          startEvent: null,
+          endEvent: null,
+          errorEvent: null,
+          llmEvent: null,
+          rowElem: null
+        };
+        state.spans.set(msg.span_id, spanData);
+        reqData.spans.set(msg.span_id, spanData);
+      }
+
+      if (msg.kind === 'fn.start') spanData.startEvent = msg;
+      else if (msg.kind === 'fn.end') spanData.endEvent = msg;
+      else if (msg.kind === 'fn.error') spanData.errorEvent = msg;
+      else if (msg.kind === 'llm.call') spanData.llmEvent = msg;
+    }
+
+    if (msg.kind === 'request.start') {
+      reqData.startEvent = msg;
+    } else if (msg.kind === 'request.end') {
+      reqData.endEvent = msg;
+    }
+
+    // Render to Stream DOM
+    if (!state.isStreamPaused) {
+      renderStreamEvent(msg);
+    } else {
+      state.unreadWhileScrolledUp++;
+      updateJumpLatestPill();
+    }
+
+    updateStreamStats();
+  }
+
+  function handleValueResponse(msg) {
+    const spanData = state.spans.get(msg.span_id);
+    if (!spanData) return;
+
+    if (msg.field === 'args' && spanData.startEvent && spanData.startEvent.data) {
+      spanData.startEvent.data.args = msg.value;
+      spanData.startEvent.data.args_truncated = false;
+    } else if (msg.field === 'result' && spanData.endEvent && spanData.endEvent.data) {
+      spanData.endEvent.data.result = msg.value;
+      spanData.endEvent.data.result_truncated = false;
+    }
+
+    // Refresh Inspector if this span is currently open
+    if (state.selectedSpanId === msg.span_id) {
+      renderInspector(spanData);
+      showToast(`Loaded full untruncated ${msg.field} data`);
+    }
+  }
+
+  /* --------------------------------------------------------------------------
+     STREAM RENDERING ENGINE
+     -------------------------------------------------------------------------- */
+  function renderStreamEvent(msg) {
+    // Hide empty state on first event
+    el.streamEmptyState.style.display = 'none';
+
+    const reqId = msg.request_id || 'unscoped';
+    const reqData = state.requests.get(reqId);
+
+    // Check filter match
+    const isMatch = checkEventFilterMatch(msg);
+
+    // 1. Ensure Request Container Group exists
+    if (!reqData.groupElem) {
+      const group = document.createElement('div');
+      group.className = 'stream-group';
+      group.id = `req-group-${reqId}`;
+      group.style.borderLeftColor = getDeterministicColor(reqId);
+
+      const entriesBox = document.createElement('div');
+      entriesBox.className = 'req-entries-container';
+
+      group.appendChild(entriesBox);
+      el.streamEntriesContainer.appendChild(group);
+
+      reqData.groupElem = group;
+      reqData.entriesContainer = entriesBox;
+    }
+
+    // 2. Render specific kinds
+    if (msg.kind === 'request.start') {
+      const startRow = document.createElement('div');
+      startRow.className = 'req-start-row';
+      const method = msg.data?.method || 'POST';
+      const path = msg.data?.path || '/';
+      const summary = msg.data?.summary ? `· ${msg.data.summary}` : '';
+      const timeStr = formatTimestamp(msg.ts);
+
+      startRow.innerHTML = `
+        <div class="req-start-left">
+          <span class="req-method method-${method}">${method}</span>
+          <span class="req-path">${escapeHtml(path)}</span>
+          <span class="req-summary">${escapeHtml(summary)}</span>
+        </div>
+        <div class="req-start-right">
+          <span class="spinner-icon req-spinner"></span>
+          <span style="color: var(--text-muted);">${timeStr}</span>
+        </div>
+      `;
+
+      reqData.spinnerElem = startRow.querySelector('.req-spinner');
+      reqData.groupElem.insertBefore(startRow, reqData.entriesContainer);
+    }
+    else if (msg.kind === 'request.end') {
+      if (reqData.spinnerElem) {
+        reqData.spinnerElem.style.display = 'none';
+      }
+      const endRow = document.createElement('div');
+      endRow.className = 'req-end-row';
+      const status = msg.data?.status || 200;
+      const durationMs = msg.data?.duration_ms || 0;
+      const statusClass = status >= 400 ? 'badge-slow' : 'badge-fast';
+
+      endRow.innerHTML = `
+        <span class="badge ${statusClass}">${status} OK</span>
+        <span class="badge badge-dim">${formatDuration(durationMs)}</span>
+      `;
+      reqData.groupElem.appendChild(endRow);
+    }
+    else if (msg.kind === 'fn.start') {
+      const row = createFunctionStartRow(msg);
+      reqData.entriesContainer.appendChild(row);
+      const spanData = state.spans.get(msg.span_id);
+      if (spanData) spanData.rowElem = row;
+      if (!isMatch) row.style.display = 'none';
+    }
+    else if (msg.kind === 'fn.end') {
+      updateFunctionEndRow(msg);
+    }
+    else if (msg.kind === 'fn.error') {
+      const row = createFunctionErrorRow(msg);
+      reqData.entriesContainer.appendChild(row);
+      const spanData = state.spans.get(msg.span_id);
+      if (spanData) spanData.rowElem = row;
+      if (!isMatch) row.style.display = 'none';
+    }
+    else if (msg.kind === 'llm.call') {
+      const row = createLlmCallRow(msg);
+      reqData.entriesContainer.appendChild(row);
+      const spanData = state.spans.get(msg.span_id);
+      if (spanData) spanData.rowElem = row;
+      if (!isMatch) row.style.display = 'none';
+    }
+    else if (msg.kind === 'log') {
+      const row = createLogRow(msg);
+      reqData.entriesContainer.appendChild(row);
+      if (!isMatch) row.style.display = 'none';
+    }
+
+    if (state.autoScroll) {
+      scrollToBottom();
+    } else {
+      state.unreadWhileScrolledUp++;
+      updateJumpLatestPill();
+    }
+  }
+
+  function createTreeGuideHtml(depth) {
+    if (!depth || depth <= 0) return '<span class="tree-branch">▸</span>';
+    let html = '<span class="tree-guide-indent">';
+    for (let i = 0; i < depth - 1; i++) {
+      html += '<span class="tree-segment"></span>';
+    }
+    html += '</span><span class="tree-branch">├──</span>';
+    return html;
+  }
+
+  function createFunctionStartRow(msg) {
+    const row = document.createElement('div');
+    row.className = 'stream-row';
+    row.dataset.spanId = msg.span_id;
+    row.dataset.seq = msg.seq;
+
+    const shortName = msg.data?.qualname || (msg.data?.name ? msg.data.name.split(':').pop() : 'anonymous');
+    const argsSummary = formatArgsPreview(msg.data?.args);
+    const depthHtml = createTreeGuideHtml(msg.depth);
+
+    row.innerHTML = `
+      ${depthHtml}
+      <div class="row-content">
+        <span class="fn-name-label">${escapeHtml(shortName)}</span>
+        <span class="fn-args-preview" title="${escapeHtml(argsSummary)}">${escapeHtml(argsSummary)}</span>
+      </div>
+      <div class="row-meta-right">
+        <span class="row-duration-slot badge badge-dim" style="font-size: 10px; opacity: 0.6;">running</span>
+      </div>
+    `;
+
+    row.addEventListener('click', () => selectSpan(msg.span_id));
+    return row;
+  }
+
+  function updateFunctionEndRow(msg) {
+    const spanData = state.spans.get(msg.span_id);
+    if (!spanData || !spanData.rowElem) return;
+
+    const row = spanData.rowElem;
+    const durationSlot = row.querySelector('.row-duration-slot');
+    if (durationSlot) {
+      const dur = msg.data?.duration_ms || 0;
+      durationSlot.className = `badge ${getDurationBadgeClass(dur)}`;
+      durationSlot.style.opacity = '1';
+      durationSlot.textContent = formatDuration(dur);
+    }
+
+    // Optional return value preview
+    if (msg.data?.result !== undefined) {
+      const resPreview = JSON.stringify(msg.data.result);
+      if (resPreview && resPreview !== '{}') {
+        const contentBox = row.querySelector('.row-content');
+        if (contentBox && !row.querySelector('.fn-result-preview')) {
+          const resSpan = document.createElement('span');
+          resSpan.className = 'fn-result-preview';
+          resSpan.textContent = `→ ${resPreview.slice(0, 45)}${resPreview.length > 45 ? '…' : ''}`;
+          contentBox.appendChild(resSpan);
+        }
+      }
+    }
+  }
+
+  function createFunctionErrorRow(msg) {
+    const row = document.createElement('div');
+    row.className = 'stream-row row-error';
+    row.dataset.spanId = msg.span_id;
+    row.dataset.seq = msg.seq;
+
+    const shortName = msg.data?.name ? msg.data.name.split(':').pop() : 'function';
+    const excType = msg.data?.exc_type || 'Error';
+    const errorMsg = msg.data?.message || '';
+    const depthHtml = createTreeGuideHtml(msg.depth);
+    const dur = msg.data?.duration_ms || 0;
+
+    row.innerHTML = `
+      ${depthHtml}
+      <div class="row-content">
+        <span class="fn-name-label">⚠️ ${escapeHtml(shortName)}</span>
+        <span class="badge badge-slow">${escapeHtml(excType)}</span>
+        <span class="fn-args-preview" style="color: #fca5a5;">${escapeHtml(errorMsg)}</span>
+      </div>
+      <div class="row-meta-right">
+        <span class="badge badge-slow">${formatDuration(dur)}</span>
+      </div>
+    `;
+
+    row.addEventListener('click', () => selectSpan(msg.span_id));
+    return row;
+  }
+
+  function createLlmCallRow(msg) {
+    const row = document.createElement('div');
+    row.className = 'stream-row row-llm';
+    row.dataset.spanId = msg.span_id;
+    row.dataset.seq = msg.seq;
+
+    const label = msg.data?.label || 'generation';
+    const model = msg.data?.model || 'llm';
+    const dur = msg.data?.duration_ms || 0;
+    const tokens = msg.data?.tokens;
+    const tokenStr = tokens ? `${tokens.in || 0} in / ${tokens.out || 0} out` : '';
+    const depthHtml = createTreeGuideHtml(msg.depth);
+
+    row.innerHTML = `
+      ${depthHtml}
+      <div class="row-content">
+        <span class="fn-name-label">✨ ${escapeHtml(label)}</span>
+        <span class="badge badge-llm">${escapeHtml(model)}</span>
+        ${tokenStr ? `<span class="badge badge-dim" style="font-size: 10px;">${tokenStr}</span>` : ''}
+      </div>
+      <div class="row-meta-right">
+        <span class="badge ${getDurationBadgeClass(dur)}">${formatDuration(dur)}</span>
+      </div>
+    `;
+
+    row.addEventListener('click', () => selectSpan(msg.span_id));
+    return row;
+  }
+
+  function createLogRow(msg) {
+    const row = document.createElement('div');
+    row.className = 'stream-row row-log';
+    const level = (msg.data?.level || 'info').toLowerCase();
+    const line = msg.data?.line || '';
+    const timeStr = formatTimestamp(msg.ts);
+
+    row.innerHTML = `
+      <span style="color: var(--text-dim); margin-right: 6px;">${timeStr}</span>
+      <span class="log-level lvl-${level}">${level.toUpperCase()}</span>
+      <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(line)}</span>
+    `;
+    return row;
+  }
+
+  function checkEventFilterMatch(msg) {
+    const query = state.filterQuery.toLowerCase().trim();
+    if (!query) return true;
+
+    if (msg.request_id && msg.request_id.toLowerCase().includes(query)) return true;
+    if (msg.span_id && msg.span_id.toLowerCase().includes(query)) return true;
+    if (msg.kind && msg.kind.toLowerCase().includes(query)) return true;
+    
+    if (msg.data) {
+      if (msg.data.name && msg.data.name.toLowerCase().includes(query)) return true;
+      if (msg.data.qualname && msg.data.qualname.toLowerCase().includes(query)) return true;
+      if (msg.data.path && msg.data.path.toLowerCase().includes(query)) return true;
+      if (msg.data.model && msg.data.model.toLowerCase().includes(query)) return true;
+      if (msg.data.line && msg.data.line.toLowerCase().includes(query)) return true;
+      if (msg.data.message && msg.data.message.toLowerCase().includes(query)) return true;
+    }
+    return false;
+  }
+
+  function applyStreamFilter() {
+    const allRows = el.streamEntriesContainer.querySelectorAll('.stream-row');
+    allRows.forEach(row => {
+      const spanId = row.dataset.spanId;
+      const seq = Number(row.dataset.seq);
+      const ev = state.eventsBySeq.get(seq);
+      if (!ev) return;
+      row.style.display = checkEventFilterMatch(ev) ? '' : 'none';
+    });
+  }
+
+  function updateStreamStats() {
+    let activeReqs = 0;
+    state.requests.forEach(r => {
+      if (r.startEvent && !r.endEvent) activeReqs++;
+    });
+
+    el.streamActiveReqs.textContent = `● ${activeReqs} active requests`;
+    el.streamActiveReqs.style.color = activeReqs > 0 ? 'var(--accent-amber)' : 'var(--accent-emerald)';
+    el.streamTotalEvents.textContent = `${state.events.length} events`;
+  }
+
+  function clearStream() {
+    state.events = [];
+    state.eventsBySeq.clear();
+    state.requests.clear();
+    state.spans.clear();
+    state.selectedSpanId = null;
+    state.focusedIndex = -1;
+    el.streamEntriesContainer.innerHTML = '';
+    el.streamEmptyState.style.display = 'flex';
+    closeInspector();
+    updateStreamStats();
+    updateJumpLatestPill();
+  }
+
+  /* --------------------------------------------------------------------------
+     INSPECTOR PANE ENGINE
+     -------------------------------------------------------------------------- */
+  function selectSpan(spanId) {
+    if (!spanId) return;
+    state.selectedSpanId = spanId;
+
+    // Highlight row in stream
+    el.streamEntriesContainer.querySelectorAll('.stream-row').forEach(r => {
+      r.classList.toggle('selected', r.dataset.spanId === spanId);
+    });
+
+    const spanData = state.spans.get(spanId);
+    if (!spanData) return;
+
+    renderInspector(spanData);
+    openInspector();
+  }
+
+  function openInspector() {
+    el.inspectorPane.classList.remove('hidden');
+  }
+
+  function closeInspector() {
+    el.inspectorPane.classList.add('hidden');
+    state.selectedSpanId = null;
+    el.streamEntriesContainer.querySelectorAll('.stream-row.selected').forEach(r => {
+      r.classList.remove('selected');
+    });
+  }
+
+  function renderInspector(span) {
+    el.inspectorSpanId.textContent = span.span_id;
+    el.inspectorSpanId.onclick = () => copyText(span.span_id, 'Span ID copied');
+
+    // 1. Ancestor Breadcrumbs
+    renderBreadcrumbs(span);
+
+    // 2. Timing Bar
+    const duration = getSpanDuration(span);
+    const parentDuration = getParentDuration(span) || duration || 1;
+    const pct = Math.min(Math.round((duration / parentDuration) * 100), 100);
+
+    el.inspectorTimingText.textContent = formatDuration(duration);
+    el.inspectorTimingFill.style.width = `${Math.max(pct, 4)}%`;
+    el.inspectorTimingFill.className = `timing-bar-fill ${span.kind === 'llm.call' ? 'llm' : ''}`;
+    el.inspectorTimingPct.textContent = `${pct}% of parent`;
+    el.inspectorTimingSub.textContent = `Span duration (${formatDuration(duration)}) vs parent (${formatDuration(parentDuration)})`;
+
+    // 3. Header Kind & Metadata Box
+    if (span.kind === 'llm.call') {
+      el.inspectorKindBadge.textContent = 'LLM PIPELINE CALL';
+      el.inspectorKindBadge.className = 'badge badge-llm';
+      el.inspectorFnMeta.classList.add('hidden');
+      el.inspectorLlmMeta.classList.remove('hidden');
+
+      const llmEv = span.llmEvent?.data || {};
+      el.inspectorLlmModel.textContent = llmEv.model || 'LLM Model';
+      el.inspectorLlmLabel.textContent = llmEv.label || 'structuring';
+      
+      const tok = llmEv.tokens || { in: 0, out: 0 };
+      const total = (tok.in || 0) + (tok.out || 0);
+      el.inspectorLlmTokens.innerHTML = `Tokens: <strong>${tok.in?.toLocaleString() || 0}</strong> in · <strong>${tok.out?.toLocaleString() || 0}</strong> out · <strong>${total.toLocaleString()}</strong> total`;
+
+      renderLlmInspectorContent(span);
+    } else {
+      el.inspectorKindBadge.textContent = span.errorEvent ? 'FUNCTION ERROR' : 'FUNCTION CALL';
+      el.inspectorKindBadge.className = span.errorEvent ? 'badge badge-slow' : 'badge badge-cyan';
+      el.inspectorFnMeta.classList.remove('hidden');
+      el.inspectorLlmMeta.classList.add('hidden');
+
+      const startData = span.startEvent?.data || {};
+      const qualname = startData.qualname || (startData.name ? startData.name.split(':').pop() : 'function');
+      const module = startData.module || (startData.name ? startData.name.split(':')[0] : 'app');
+      const signature = startData.signature || '(...)';
+
+      // Find catalog doc if available
+      let doc = 'No docstring recorded.';
+      state.catalog.groups.forEach(g => {
+        const found = g.functions.find(f => f.id === startData.name || f.name === qualname);
+        if (found && found.doc) doc = found.doc;
+      });
+
+      el.inspectorFnName.textContent = qualname;
+      el.inspectorFnModule.textContent = module;
+      el.inspectorFnSig.textContent = `${qualname}${signature}`;
+      el.inspectorFnDoc.textContent = doc;
+
+      renderFunctionInspectorContent(span);
+    }
+  }
+
+  function renderBreadcrumbs(span) {
+    el.inspectorBreadcrumbs.innerHTML = '';
+    const chain = [];
+    let curr = span;
+
+    while (curr) {
+      chain.unshift(curr);
+      curr = curr.parent_span_id ? state.spans.get(curr.parent_span_id) : null;
+    }
+
+    // Add Root Request ID item
+    const reqItem = document.createElement('span');
+    reqItem.className = 'breadcrumb-item';
+    reqItem.textContent = span.request_id;
+    reqItem.title = `Request ID: ${span.request_id} (click to filter)`;
+    reqItem.onclick = () => {
+      el.streamFilterInput.value = span.request_id;
+      state.filterQuery = span.request_id;
+      applyStreamFilter();
+    };
+    el.inspectorBreadcrumbs.appendChild(reqItem);
+
+    chain.forEach((item, idx) => {
+      const sep = document.createElement('span');
+      sep.className = 'breadcrumb-sep';
+      sep.textContent = '>';
+      el.inspectorBreadcrumbs.appendChild(sep);
+
+      const name = getSpanShortName(item);
+      const spanItem = document.createElement('span');
+      const isCurrent = idx === chain.length - 1;
+      spanItem.className = `breadcrumb-item ${isCurrent ? 'current' : ''}`;
+      spanItem.textContent = name;
+      if (!isCurrent) {
+        spanItem.onclick = () => selectSpan(item.span_id);
+      }
+      el.inspectorBreadcrumbs.appendChild(spanItem);
+    });
+  }
+
+  function renderFunctionInspectorContent(span) {
+    el.inspectorDynamicContent.innerHTML = '';
+
+    const startData = span.startEvent?.data || {};
+    const endData = span.endEvent?.data || {};
+    const errorData = span.errorEvent?.data || null;
+
+    // 1. INPUT Section
+    const inputCard = document.createElement('div');
+    inputCard.className = 'io-card';
+    inputCard.innerHTML = `
+      <div class="io-card-header">
+        <span>INPUT (Arguments)</span>
+        <button class="btn-sm btn-copy-args">Copy JSON</button>
+      </div>
+      <div class="io-card-content">
+        ${startData.args_truncated ? `
+          <div class="truncation-banner">
+            <span>⚠️ Arguments payload is truncated</span>
+            <button class="btn-sm btn-primary btn-load-full-args">⚡ Load Full Value</button>
+          </div>
+        ` : ''}
+        <div class="json-code-box json-args-box">${formatJsonHighlight(startData.args || {})}</div>
+      </div>
+    `;
+
+    inputCard.querySelector('.btn-copy-args').onclick = () => copyText(JSON.stringify(startData.args, null, 2), 'Arguments copied');
+    const loadArgsBtn = inputCard.querySelector('.btn-load-full-args');
+    if (loadArgsBtn) {
+      loadArgsBtn.onclick = () => {
+        loadArgsBtn.disabled = true;
+        loadArgsBtn.textContent = 'Fetching full value...';
+        sendClientMessage({ op: 'get_value', request_id: span.request_id, span_id: span.span_id, field: 'args' });
+      };
+    }
+    el.inspectorDynamicContent.appendChild(inputCard);
+
+    // 2. OUTPUT Section / Traceback
+    if (errorData) {
+      const errorCard = document.createElement('div');
+      errorCard.className = 'io-card';
+      errorCard.style.borderColor = 'rgba(248, 113, 113, 0.4)';
+      errorCard.innerHTML = `
+        <div class="io-card-header" style="background: #201014; color: var(--accent-rose);">
+          <span>EXCEPTION (Error Traceback)</span>
+          <button class="btn-sm btn-copy-tb">Copy Traceback</button>
+        </div>
+        <div class="io-card-content">
+          <div style="font-weight: 600; font-size: 12px; color: var(--accent-rose);">
+            ${escapeHtml(errorData.exc_type)}: ${escapeHtml(errorData.message)}
+          </div>
+          <div class="traceback-box">${escapeHtml(errorData.traceback || errorData.message || 'No traceback available.')}</div>
+        </div>
+      `;
+      errorCard.querySelector('.btn-copy-tb').onclick = () => copyText(errorData.traceback || errorData.message, 'Traceback copied');
+      el.inspectorDynamicContent.appendChild(errorCard);
+    } else {
+      const outputCard = document.createElement('div');
+      outputCard.className = 'io-card';
+      outputCard.innerHTML = `
+        <div class="io-card-header">
+          <span>OUTPUT (Return Value)</span>
+          <button class="btn-sm btn-copy-res">Copy JSON</button>
+        </div>
+        <div class="io-card-content">
+          ${endData.result_truncated ? `
+            <div class="truncation-banner">
+              <span>⚠️ Return value payload is truncated</span>
+              <button class="btn-sm btn-primary btn-load-full-res">⚡ Load Full Value</button>
+            </div>
+          ` : ''}
+          <div class="json-code-box json-res-box">${formatJsonHighlight(endData.result !== undefined ? endData.result : (span.endEvent ? null : 'Call in progress...'))}</div>
+        </div>
+      `;
+
+      outputCard.querySelector('.btn-copy-res').onclick = () => copyText(JSON.stringify(endData.result, null, 2), 'Return value copied');
+      const loadResBtn = outputCard.querySelector('.btn-load-full-res');
+      if (loadResBtn) {
+        loadResBtn.onclick = () => {
+          loadResBtn.disabled = true;
+          loadResBtn.textContent = 'Fetching full value...';
+          sendClientMessage({ op: 'get_value', request_id: span.request_id, span_id: span.span_id, field: 'result' });
+        };
+      }
+      el.inspectorDynamicContent.appendChild(outputCard);
+    }
+  }
+
+  function renderLlmInspectorContent(span) {
+    el.inspectorDynamicContent.innerHTML = '';
+    const llmData = span.llmEvent?.data || {};
+
+    // 1. Messages Transcript Section
+    const transcriptCard = document.createElement('div');
+    transcriptCard.className = 'io-card';
+    transcriptCard.innerHTML = `
+      <div class="io-card-header" style="background: #171124; color: var(--accent-violet);">
+        <span>PROMPT MESSAGES TRANSCRIPT (${llmData.messages?.length || 0})</span>
+        <button class="btn-sm btn-copy-transcript">Copy All Messages</button>
+      </div>
+      <div class="io-card-content">
+        <div class="llm-transcript-box">
+          ${(llmData.messages || []).map(m => `
+            <div class="chat-bubble role-${escapeHtml(m.role || 'user')}">
+              <div class="chat-bubble-header">
+                <span>${escapeHtml(m.role || 'USER')}</span>
+              </div>
+              <div class="chat-bubble-content">${escapeHtml(m.content || '')}</div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+
+    transcriptCard.querySelector('.btn-copy-transcript').onclick = () => copyText(JSON.stringify(llmData.messages, null, 2), 'Transcript copied');
+    el.inspectorDynamicContent.appendChild(transcriptCard);
+
+    // 2. Model Completion Output Card (with Raw Text vs Parsed tabs)
+    const completionCard = document.createElement('div');
+    completionCard.className = 'io-card';
+    completionCard.innerHTML = `
+      <div class="io-card-header">
+        <span>MODEL OUTPUT</span>
+        <button class="btn-sm btn-copy-output">Copy Output</button>
+      </div>
+      <div class="io-card-content">
+        <div class="tab-bar">
+          <button class="tab-btn ${state.llmActiveTab === 'parsed' ? 'active' : ''}" data-tab="parsed">Structured Result (Parsed)</button>
+          <button class="tab-btn ${state.llmActiveTab === 'raw' ? 'active' : ''}" data-tab="raw">Raw Model Completion</button>
+        </div>
+        
+        <div id="llm-tab-parsed" class="${state.llmActiveTab === 'parsed' ? '' : 'hidden'}">
+          <div class="json-code-box">${formatJsonHighlight(llmData.parsed || {})}</div>
+        </div>
+        
+        <div id="llm-tab-raw" class="${state.llmActiveTab === 'raw' ? '' : 'hidden'}">
+          <div class="json-code-box" style="white-space: pre-wrap; color: #f1f5f9;">${escapeHtml(llmData.raw_text || '')}</div>
+        </div>
+      </div>
+    `;
+
+    // Tab switching
+    completionCard.querySelectorAll('.tab-btn').forEach(tabBtn => {
+      tabBtn.onclick = () => {
+        state.llmActiveTab = tabBtn.dataset.tab;
+        completionCard.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b === tabBtn));
+        completionCard.querySelector('#llm-tab-parsed').classList.toggle('hidden', state.llmActiveTab !== 'parsed');
+        completionCard.querySelector('#llm-tab-raw').classList.toggle('hidden', state.llmActiveTab !== 'raw');
+      };
+    });
+
+    completionCard.querySelector('.btn-copy-output').onclick = () => {
+      const textToCopy = state.llmActiveTab === 'raw' 
+        ? llmData.raw_text 
+        : JSON.stringify(llmData.parsed, null, 2);
+      copyText(textToCopy, `${state.llmActiveTab === 'raw' ? 'Raw text' : 'Parsed JSON'} copied`);
+    };
+
+    el.inspectorDynamicContent.appendChild(completionCard);
+  }
+
+  function getSpanDuration(span) {
+    if (span.endEvent?.data?.duration_ms != null) return span.endEvent.data.duration_ms;
+    if (span.errorEvent?.data?.duration_ms != null) return span.errorEvent.data.duration_ms;
+    if (span.llmEvent?.data?.duration_ms != null) return span.llmEvent.data.duration_ms;
+    return 0;
+  }
+
+  function getParentDuration(span) {
+    if (span.parent_span_id) {
+      const parent = state.spans.get(span.parent_span_id);
+      if (parent) return getSpanDuration(parent);
+    }
+    const req = state.requests.get(span.request_id);
+    if (req && req.endEvent?.data?.duration_ms) return req.endEvent.data.duration_ms;
+    return 0;
+  }
+
+  function getSpanShortName(span) {
+    if (span.startEvent?.data?.qualname) return span.startEvent.data.qualname;
+    if (span.startEvent?.data?.name) return span.startEvent.data.name.split(':').pop();
+    if (span.llmEvent?.data?.label) return `✨ ${span.llmEvent.data.label}`;
+    if (span.errorEvent?.data?.name) return `⚠️ ${span.errorEvent.data.name.split(':').pop()}`;
+    return span.span_id;
+  }
+
+  /* --------------------------------------------------------------------------
+     MOCK SIMULATION ENGINE (OFFLINE DEMO MODE)
+     -------------------------------------------------------------------------- */
+  let mockInterval = null;
+  let mockSeqCounter = 100;
+  let mockRequestCounter = 1;
+
+  function startMockEngine() {
+    state.isMockMode = true;
+    updateConnectionUI('mock', 'Mock Mode (Demo)');
+    el.modeBtnLive.classList.remove('active');
+    el.modeBtnMock.classList.add('active', 'mock-active');
+
+    // Close real WS if open
+    if (socket) {
+      try { socket.close(); } catch (e) {}
+      socket = null;
+    }
+
+    showToast('Switched to Mock Demo Mode');
+    triggerMockPipeline(); // run one immediately
+
+    clearInterval(mockInterval);
+    mockInterval = setInterval(() => {
+      if (state.isMockMode && !state.isStreamPaused) {
+        triggerMockPipeline();
+      }
+    }, 6000);
+  }
+
+  function stopMockEngine() {
+    state.isMockMode = false;
+    clearInterval(mockInterval);
+    mockInterval = null;
+    el.modeBtnMock.classList.remove('active', 'mock-active');
+    el.modeBtnLive.classList.add('active');
+    initWebSocket();
+  }
+
+  function triggerMockPipeline(customDomain, customPrompt) {
+    const reqNum = mockRequestCounter++;
+    const reqId = `req_${String(reqNum).padStart(4, '0')}`;
+    const baseTs = Date.now() / 1000;
+    const isErrorFlow = (reqNum % 3 === 0);
+    const domain = customDomain || (reqNum % 2 === 0 ? 'execution' : 'quotation');
+    const prompt = customPrompt || (isErrorFlow 
+      ? 'Calculate price with missing unit_price parameter' 
+      : 'Extract commercial terms and pricing schedule from RFP contract');
+
+    const scriptedEvents = [
+      // 1. Request Start
+      {
+        kind: 'request.start',
+        request_id: reqId,
+        seq: ++mockSeqCounter,
+        ts: baseTs,
+        data: {
+          method: 'POST',
+          path: `/${domain}/context/ctx_${reqNum}/chat`,
+          summary: `${domain} chat pipeline`
+        }
+      },
+      // 2. Log
+      {
+        kind: 'log',
+        request_id: reqId,
+        seq: ++mockSeqCounter,
+        ts: baseTs + 0.02,
+        data: { level: 'info', line: `--> received POST /${domain}/context/ctx_${reqNum}/chat (session_id=sess_${reqNum})` }
+      },
+      // 3. Top-level pipeline start (Depth 1)
+      {
+        kind: 'fn.start',
+        request_id: reqId,
+        span_id: `sp_${reqNum}_1`,
+        parent_span_id: null,
+        seq: ++mockSeqCounter,
+        ts: baseTs + 0.05,
+        depth: 1,
+        data: {
+          name: 'app.quotation.extraction.pipeline:run_pipeline',
+          qualname: 'run_pipeline',
+          module: 'app.quotation.extraction.pipeline',
+          signature: '(raw_text: str, *, domain: str = "quotation")',
+          args: { raw_text: prompt.slice(0, 50) + '...', domain: domain },
+          args_truncated: true
+        }
+      },
+      // 4. Processing chunk (Depth 2)
+      {
+        kind: 'fn.start',
+        request_id: reqId,
+        span_id: `sp_${reqNum}_2`,
+        parent_span_id: `sp_${reqNum}_1`,
+        seq: ++mockSeqCounter,
+        ts: baseTs + 0.12,
+        depth: 2,
+        data: {
+          name: 'app.quotation.extraction.pipeline:_process_chunk',
+          qualname: '_process_chunk',
+          module: 'app.quotation.extraction.pipeline',
+          signature: '(chunk: str, *, ontology: dict, domain: str)',
+          args: { chunk: prompt, ontology: { type: 'RFP_Contract', version: 2 }, domain: domain },
+          args_truncated: false
+        }
+      },
+      // 5. LLM Call (Depth 3)
+      {
+        kind: 'llm.call',
+        request_id: reqId,
+        span_id: `sp_${reqNum}_3`,
+        parent_span_id: `sp_${reqNum}_2`,
+        seq: ++mockSeqCounter,
+        ts: baseTs + 0.35,
+        depth: 3,
+        data: {
+          label: 'structuring',
+          model: 'gpt-4o',
+          duration_ms: 1850,
+          tokens: { in: 1240, out: 380 },
+          messages: [
+            { role: 'system', content: 'You are an AI quotation graph extraction engine. Extract JSON entities matching Ontology schema.' },
+            { role: 'user', content: `Please structure the following request payload:\n\n${prompt}` }
+          ],
+          raw_text: '```json\n{\n  "entities": [\n    {"name": "Server Cluster", "qty": 4, "unit_price": 2400.0},\n    {"name": "Support SLA Gold", "qty": 1, "unit_price": 12000.0}\n  ],\n  "currency": "USD",\n  "tax_rate": 0.0825\n}\n```',
+          parsed: {
+            entities: [
+              { name: 'Server Cluster', qty: 4, unit_price: 2400.0, total: 9600.0 },
+              { name: 'Support SLA Gold', qty: 1, unit_price: 12000.0, total: 12000.0 }
+            ],
+            currency: 'USD',
+            tax_rate: 0.0825,
+            subtotal: 21600.0,
+            grand_total: 23382.0
+          }
+        }
+      }
+    ];
+
+    if (isErrorFlow) {
+      // Error path
+      scriptedEvents.push(
+        {
+          kind: 'fn.error',
+          request_id: reqId,
+          span_id: `sp_${reqNum}_4`,
+          parent_span_id: `sp_${reqNum}_2`,
+          seq: ++mockSeqCounter,
+          ts: baseTs + 2.25,
+          depth: 3,
+          data: {
+            name: 'app.quotation.graph.calculator:calculate_totals',
+            qualname: 'calculate_totals',
+            exc_type: 'ValidationError',
+            message: "Missing required field 'unit_price' in item line 4",
+            duration_ms: 14,
+            traceback: `Traceback (most recent call last):\n  File "/app/quotation/graph/calculator.py", line 84, in calculate_totals\n    val = float(item["unit_price"]) * item["qty"]\nKeyError: 'unit_price'\n\nDuring handling of the above exception, another exception occurred:\n\npydantic.error_wrappers.ValidationError: 1 validation error for QuotationItem\nunit_price\n  field required (type=value_error.missing)`
+          }
+        },
+        {
+          kind: 'fn.end',
+          request_id: reqId,
+          span_id: `sp_${reqNum}_2`,
+          seq: ++mockSeqCounter,
+          ts: baseTs + 2.30,
+          depth: 2,
+          data: {
+            name: 'app.quotation.extraction.pipeline:_process_chunk',
+            duration_ms: 2180,
+            result: { error: 'ValidationError in calculate_totals' },
+            result_truncated: false
+          }
+        },
+        {
+          kind: 'fn.end',
+          request_id: reqId,
+          span_id: `sp_${reqNum}_1`,
+          seq: ++mockSeqCounter,
+          ts: baseTs + 2.35,
+          depth: 1,
+          data: {
+            name: 'app.quotation.extraction.pipeline:run_pipeline',
+            duration_ms: 2300,
+            result: { success: false, status: 500 },
+            result_truncated: false
+          }
+        },
+        {
+          kind: 'request.end',
+          request_id: reqId,
+          seq: ++mockSeqCounter,
+          ts: baseTs + 2.40,
+          data: { status: 500, duration_ms: 2400 }
+        }
+      );
+    } else {
+      // Normal Success path
+      scriptedEvents.push(
+        {
+          kind: 'fn.start',
+          request_id: reqId,
+          span_id: `sp_${reqNum}_4`,
+          parent_span_id: `sp_${reqNum}_2`,
+          seq: ++mockSeqCounter,
+          ts: baseTs + 2.22,
+          depth: 3,
+          data: {
+            name: 'app.quotation.graph.builder:build_quotation_graph',
+            qualname: 'build_quotation_graph',
+            module: 'app.quotation.graph.builder',
+            signature: '(quotation_id: str, nodes: list)',
+            args: { quotation_id: `q_${reqNum}`, nodes_count: 2 },
+            args_truncated: false
+          }
+        },
+        {
+          kind: 'fn.end',
+          request_id: reqId,
+          span_id: `sp_${reqNum}_4`,
+          seq: ++mockSeqCounter,
+          ts: baseTs + 2.55,
+          depth: 3,
+          data: {
+            name: 'app.quotation.graph.builder:build_quotation_graph',
+            duration_ms: 330,
+            result: { graph_id: `dag_${reqNum}`, status: 'RESOLVED', total_nodes: 8 },
+            result_truncated: false
+          }
+        },
+        {
+          kind: 'fn.end',
+          request_id: reqId,
+          span_id: `sp_${reqNum}_2`,
+          seq: ++mockSeqCounter,
+          ts: baseTs + 2.65,
+          depth: 2,
+          data: {
+            name: 'app.quotation.extraction.pipeline:_process_chunk',
+            duration_ms: 2530,
+            result: { chunk_index: 0, entities_found: 2, status: 'PROCESSED' },
+            result_truncated: false
+          }
+        },
+        {
+          kind: 'fn.end',
+          request_id: reqId,
+          span_id: `sp_${reqNum}_1`,
+          seq: ++mockSeqCounter,
+          ts: baseTs + 2.75,
+          depth: 1,
+          data: {
+            name: 'app.quotation.extraction.pipeline:run_pipeline',
+            duration_ms: 2700,
+            result: { quotation_id: `q_${reqNum}`, subtotal: 21600.0, grand_total: 23382.0 },
+            result_truncated: true
+          }
+        },
+        {
+          kind: 'request.end',
+          request_id: reqId,
+          seq: ++mockSeqCounter,
+          ts: baseTs + 2.80,
+          data: { status: 200, duration_ms: 2800 }
+        }
+      );
+    }
+
+    // Play events with slight realistic delays
+    let delay = 0;
+    scriptedEvents.forEach((ev, i) => {
+      delay += (i === 0 ? 0 : (i === 4 ? 600 : 150));
+      setTimeout(() => {
+        handleIncomingMessage(ev);
+      }, delay);
+    });
+  }
+
+  function handleMockClientMessage(msg) {
+    if (msg.op === 'select') {
+      // Mock acknowledge
+      console.log('[Mock WS] selection updated:', msg.functions?.length);
+    } else if (msg.op === 'get_value') {
+      setTimeout(() => {
+        handleIncomingMessage({
+          kind: 'value',
+          span_id: msg.span_id,
+          field: msg.field,
+          value: msg.field === 'args' 
+            ? { full_document: "This is the complete untruncated quotation document with 40 line items, terms, signature requirements, and warranty schedules.", encoding: "utf-8", priority: 1 }
+            : { quotation_id: "q_FULL_UNTRUNCATED_998", items: Array.from({ length: 15 }, (_, i) => ({ id: i + 1, item: `SKU-PROD-${100+i}`, qty: 2 + i, price: 450.0 + (i*10) })), total_net: 48950.0 }
+        });
+      }, 300);
+    } else if (msg.op === 'run_test') {
+      showToast(`Test triggered in domain: ${msg.domain}`);
+      triggerMockPipeline(msg.domain, msg.message);
+    }
+  }
+
+  /* --------------------------------------------------------------------------
+     KEYBOARD SHORTCUTS & EVENT LISTENERS
+     -------------------------------------------------------------------------- */
+  function setupEventListeners() {
+    // Left Rail Toggle
+    el.btnToggleCatalog.addEventListener('click', () => {
+      el.catalogPane.classList.toggle('collapsed');
+      el.btnToggleCatalog.classList.toggle('active');
+    });
+
+    // Test Request Drawer Toggle
+    el.testDrawerToggle.addEventListener('click', () => {
+      el.testDrawerBody.classList.toggle('hidden');
+      const isHidden = el.testDrawerBody.classList.contains('hidden');
+      document.getElementById('test-drawer-arrow').textContent = isHidden ? '▾' : '▴';
+    });
+
+    el.btnTestPanel.addEventListener('click', () => {
+      if (el.catalogPane.classList.contains('collapsed')) {
+        el.catalogPane.classList.remove('collapsed');
+      }
+      el.testDrawerBody.classList.remove('hidden');
+      document.getElementById('test-drawer-arrow').textContent = '▴';
+      el.testMessage.focus();
+    });
+
+    el.emptyBtnTest.addEventListener('click', () => {
+      el.btnTestPanel.click();
+    });
+
+    el.emptyBtnMock.addEventListener('click', () => {
+      startMockEngine();
+    });
+
+    // Test Request Submit
+    el.btnSubmitTest.addEventListener('click', () => {
+      const domain = el.testDomainSelect.value;
+      const message = el.testMessage.value.trim() || 'Process sample quotation payload';
+      const sessionId = el.testSessionId.value.trim() || null;
+
+      sendClientMessage({
+        op: 'run_test',
+        domain: domain,
+        message: message,
+        session_id: sessionId
+      });
+
+      showToast(`Triggered test request in ${domain}`);
+    });
+
+    // Catalog Search
+    el.catalogSearchInput.addEventListener('input', (e) => {
+      state.catalogSearchQuery = e.target.value;
+      renderCatalog();
+    });
+
+    // Select All / Select None
+    el.btnSelectAll.addEventListener('click', () => {
+      state.catalog.groups.forEach(g => {
+        g.functions.forEach(f => state.selectedFunctions.add(f.id));
+      });
+      onSelectionChange();
+      renderCatalog();
+      showToast('Selected all functions');
+    });
+
+    el.btnSelectNone.addEventListener('click', () => {
+      state.selectedFunctions.clear();
+      onSelectionChange();
+      renderCatalog();
+      showToast('Deselected all functions');
+    });
+
+    // Stream Controls
+    el.btnClearStream.addEventListener('click', clearStream);
+    
+    el.btnPauseStream.addEventListener('click', toggleStreamPause);
+
+    // Verbosity Switcher
+    el.verbSelected.addEventListener('click', () => setVerbosity('selected'));
+    el.verbAll.addEventListener('click', () => setVerbosity('all'));
+
+    // Filter Input
+    el.streamFilterInput.addEventListener('input', (e) => {
+      state.filterQuery = e.target.value;
+      applyStreamFilter();
+    });
+
+    // Jump to latest button
+    el.jumpLatestBtn.addEventListener('click', () => {
+      state.autoScroll = true;
+      state.unreadWhileScrolledUp = 0;
+      updateJumpLatestPill();
+      scrollToBottom();
+    });
+
+    // Scroll container scroll listener (for smart pause-on-scroll-up)
+    el.streamScrollContainer.addEventListener('scroll', () => {
+      const container = el.streamScrollContainer;
+      const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 40;
+      
+      if (isAtBottom) {
+        state.autoScroll = true;
+        state.unreadWhileScrolledUp = 0;
+        updateJumpLatestPill();
+      } else {
+        state.autoScroll = false;
+        el.streamAutoscrollStatus.textContent = 'Auto-scroll: PAUSED';
+        el.streamAutoscrollStatus.style.color = 'var(--accent-amber)';
+      }
+    });
+
+    // Inspector Close
+    el.btnCloseInspector.addEventListener('click', closeInspector);
+
+    // Live / Mock Toggle buttons
+    el.modeBtnLive.addEventListener('click', stopMockEngine);
+    el.modeBtnMock.addEventListener('click', startMockEngine);
+
+    // Shortcuts Modal
+    el.btnShortcuts.addEventListener('click', () => el.shortcutsModal.classList.remove('hidden'));
+    el.btnCloseModal.addEventListener('click', () => el.shortcutsModal.classList.add('hidden'));
+    el.shortcutsModal.addEventListener('click', (e) => {
+      if (e.target === el.shortcutsModal) el.shortcutsModal.classList.add('hidden');
+    });
+
+    // Global Keyboard Handler
+    window.addEventListener('keydown', handleGlobalKeydown);
+  }
+
+  function handleGlobalKeydown(e) {
+    const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
+    const isTyping = activeTag === 'input' || activeTag === 'textarea';
+
+    // 1. Slash to search catalog
+    if (e.key === '/' && !isTyping) {
+      e.preventDefault();
+      if (el.catalogPane.classList.contains('collapsed')) {
+        el.catalogPane.classList.remove('collapsed');
+      }
+      el.catalogSearchInput.focus();
+      el.catalogSearchInput.select();
+      return;
+    }
+
+    // 2. Escape to close inspector / modal / search
+    if (e.key === 'Escape') {
+      if (!el.shortcutsModal.classList.contains('hidden')) {
+        el.shortcutsModal.classList.add('hidden');
+        return;
+      }
+      if (!el.inspectorPane.classList.contains('hidden')) {
+        closeInspector();
+        return;
+      }
+      if (isTyping) {
+        document.activeElement.blur();
+      }
+      return;
+    }
+
+    // 3. Clear stream with 'c'
+    if ((e.key === 'c' || e.key === 'C') && !isTyping) {
+      e.preventDefault();
+      clearStream();
+      showToast('Cleared stream');
+      return;
+    }
+
+    // 4. Space to toggle pause
+    if (e.key === ' ' && !isTyping) {
+      e.preventDefault();
+      toggleStreamPause();
+      return;
+    }
+
+    // 5. Ctrl+B to toggle sidebar
+    if (e.ctrlKey && (e.key === 'b' || e.key === 'B')) {
+      e.preventDefault();
+      el.btnToggleCatalog.click();
+      return;
+    }
+
+    // 6. j / k to navigate stream items
+    if ((e.key === 'j' || e.key === 'k' || e.key === 'ArrowDown' || e.key === 'ArrowUp') && !isTyping) {
+      navigateStreamWithKeys(e.key === 'j' || e.key === 'ArrowDown' ? 1 : -1);
+      e.preventDefault();
+    }
+  }
+
+  function navigateStreamWithKeys(direction) {
+    const visibleRows = Array.from(el.streamEntriesContainer.querySelectorAll('.stream-row:not([style*="display: none"])'));
+    if (visibleRows.length === 0) return;
+
+    if (state.focusedIndex === -1) {
+      state.focusedIndex = direction > 0 ? 0 : visibleRows.length - 1;
+    } else {
+      state.focusedIndex += direction;
+      if (state.focusedIndex < 0) state.focusedIndex = 0;
+      if (state.focusedIndex >= visibleRows.length) state.focusedIndex = visibleRows.length - 1;
+    }
+
+    const targetRow = visibleRows[state.focusedIndex];
+    if (targetRow) {
+      targetRow.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      const spanId = targetRow.dataset.spanId;
+      if (spanId) selectSpan(spanId);
+    }
+  }
+
+  function toggleStreamPause() {
+    state.isStreamPaused = !state.isStreamPaused;
+    el.btnPauseStream.classList.toggle('active', state.isStreamPaused);
+    el.pauseIcon.textContent = state.isStreamPaused ? '▶' : '⏸';
+    el.pauseText.textContent = state.isStreamPaused ? 'Resume' : 'Pause';
+    
+    if (!state.isStreamPaused) {
+      // Catch up on unrendered events
+      renderUnrenderedEvents();
+      scrollToBottom();
+    }
+    showToast(state.isStreamPaused ? 'Stream paused' : 'Stream resumed');
+  }
+
+  function renderUnrenderedEvents() {
+    state.events.forEach(ev => {
+      const span = state.spans.get(ev.span_id);
+      if (span && span.rowElem && span.rowElem.parentNode) {
+        // already rendered
+      } else {
+        renderStreamEvent(ev);
+      }
+    });
+    state.unreadWhileScrolledUp = 0;
+    updateJumpLatestPill();
+  }
+
+  function setVerbosity(level) {
+    state.verbosity = level;
+    el.verbSelected.classList.toggle('active', level === 'selected');
+    el.verbAll.classList.toggle('active', level === 'all');
+    
+    sendClientMessage({
+      op: 'set_verbosity',
+      level: level
+    });
+    showToast(`Verbosity set to: ${level}`);
+  }
+
+  function scrollToBottom() {
+    el.streamScrollContainer.scrollTop = el.streamScrollContainer.scrollHeight;
+    state.autoScroll = true;
+    state.unreadWhileScrolledUp = 0;
+    el.streamAutoscrollStatus.textContent = 'Auto-scroll: ON';
+    el.streamAutoscrollStatus.style.color = 'var(--accent-cyan)';
+    updateJumpLatestPill();
+  }
+
+  function updateJumpLatestPill() {
+    if (!state.autoScroll && state.unreadWhileScrolledUp > 0) {
+      el.jumpLatestBtn.classList.remove('hidden');
+      el.jumpUnreadCount.textContent = state.unreadWhileScrolledUp;
+    } else {
+      el.jumpLatestBtn.classList.add('hidden');
+    }
+  }
+
+  /* --------------------------------------------------------------------------
+     UTILITY HELPERS
+     -------------------------------------------------------------------------- */
+  function escapeHtml(str) {
+    if (str == null) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  function formatTimestamp(ts) {
+    if (!ts) return '';
+    const date = new Date(ts * 1000);
+    return date.toTimeString().split(' ')[0] + '.' + String(date.getMilliseconds()).padStart(3, '0');
+  }
+
+  function formatDuration(ms) {
+    if (ms == null) return '0ms';
+    if (ms < 1000) return `${Math.round(ms)}ms`;
+    return `${(ms / 1000).toFixed(2)}s`;
+  }
+
+  function getDurationBadgeClass(ms) {
+    if (ms < 500) return 'badge-fast';
+    if (ms < 2000) return 'badge-med';
+    return 'badge-slow';
+  }
+
+  function formatArgsPreview(args) {
+    if (!args || typeof args !== 'object') return '';
+    const parts = [];
+    for (const [k, v] of Object.entries(args)) {
+      const vStr = typeof v === 'object' ? '{…}' : JSON.stringify(v);
+      parts.push(`${k}=${vStr}`);
+    }
+    return parts.join(', ');
+  }
+
+  function formatJsonHighlight(jsonObj) {
+    if (jsonObj === undefined) return '<span class="json-null">undefined</span>';
+    const jsonStr = JSON.stringify(jsonObj, null, 2);
+    if (!jsonStr) return '<span class="json-null">null</span>';
+
+    return escapeHtml(jsonStr).replace(
+      /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
+      (match) => {
+        let cls = 'json-num';
+        if (/^"/.test(match)) {
+          if (/:$/.test(match)) {
+            cls = 'json-key';
+          } else {
+            cls = 'json-str';
+          }
+        } else if (/true|false/.test(match)) {
+          cls = 'json-bool';
+        } else if (/null/.test(match)) {
+          cls = 'json-null';
+        }
+        return `<span class="${cls}">${match}</span>`;
+      }
+    );
+  }
+
+  function getDeterministicColor(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      hash = str.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    const colors = [
+      '#4ade80', '#3ce7ff', '#7dffa8', '#2fae67', '#c58bff', '#ffcf4d', '#35d0a0'
+    ];
+    return colors[Math.abs(hash) % colors.length];
+  }
+
+  let toastTimer = null;
+  function showToast(msg) {
+    el.toastPill.textContent = msg;
+    el.toastPill.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      el.toastPill.classList.remove('show');
+    }, 2200);
+  }
+
+  function copyText(text, successMsg = 'Copied to clipboard!') {
+    if (!text) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => showToast(successMsg)).catch(() => fallbackCopy(text));
+    } else {
+      fallbackCopy(text);
+    }
+  }
+
+  function fallbackCopy(text) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand('copy');
+      showToast('Copied to clipboard!');
+    } catch (e) {
+      showToast('Copy failed');
+    }
+    document.body.removeChild(ta);
+  }
+
+  /* --------------------------------------------------------------------------
+     BOOTSTRAP INITIALIZATION
+     -------------------------------------------------------------------------- */
+  async function init() {
+    setupEventListeners();
+    await loadCatalog();
+
+    // Check if offline/demo parameter or live
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('mock') === 'true' || window.location.protocol === 'file:') {
+      startMockEngine();
+    } else {
+      initWebSocket();
+    }
+  }
+
+  // Launch on DOM ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>
+</body>
+</html>
