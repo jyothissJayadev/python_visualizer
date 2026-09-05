@@ -3,7 +3,6 @@ from __future__ import annotations
 import traceback as traceback_module
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
 
 from backend.api.project import get_state
 from backend.runner.function_runner import execute_function, run_startup_hook

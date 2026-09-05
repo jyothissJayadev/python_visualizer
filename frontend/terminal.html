@@ -319,42 +319,9 @@
       box-shadow: 0 0 8px #f59e0b;
       animation: pulse 1.2s infinite;
     }
-    .status-dot.mock {
-      background: #a855f7;
-      box-shadow: 0 0 8px #a855f7;
-    }
-
     @keyframes pulse {
       0%, 100% { opacity: 1; transform: scale(1); }
       50% { opacity: 0.4; transform: scale(0.85); }
-    }
-
-    /* Mode Switch */
-    .mode-switch-pill {
-      display: flex;
-      align-items: center;
-      background: #0f1622;
-      border: 1px solid var(--border-subtle);
-      border-radius: 6px;
-      padding: 2px;
-    }
-    .mode-btn {
-      border: none;
-      padding: 3px 8px;
-      font-size: 11px;
-      color: var(--text-secondary);
-      border-radius: 4px;
-      background: transparent;
-    }
-    .mode-btn.active {
-      background: #1d293d;
-      color: #fff;
-      font-weight: 600;
-    }
-    .mode-btn.active.mock-active {
-      background: rgba(168, 85, 247, 0.2);
-      color: var(--accent-violet);
-      border: 1px solid rgba(168, 85, 247, 0.4);
     }
 
     /* ==========================================================================
@@ -1352,12 +1319,6 @@
         <span id="connection-label">Connecting...</span>
       </div>
 
-      <!-- Live / Mock Toggle -->
-      <div class="mode-switch-pill" title="Toggle between real WebSocket and offline demo simulation">
-        <button id="mode-btn-live" class="mode-btn active">Live WS</button>
-        <button id="mode-btn-mock" class="mode-btn">Mock Mode</button>
-      </div>
-
       <button id="btn-shortcuts" class="btn-sm btn-icon" title="Keyboard Shortcuts (?)">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01"/></svg>
       </button>
@@ -1451,7 +1412,6 @@
           <p>Connected to FastAPI streaming WebSocket. Make HTTP requests to the backend or trigger a test request to watch execution flow in real-time.</p>
           <div style="display: flex; gap: 8px; margin-top: 6px;">
             <button id="empty-btn-test" class="btn-primary">Send Test Request</button>
-            <button id="empty-btn-mock" class="btn-sm">Switch to Mock Mode</button>
           </div>
         </div>
 
@@ -1562,8 +1522,6 @@
      STATE MANAGEMENT
      -------------------------------------------------------------------------- */
   const state = {
-    // Mode
-    isMockMode: false,
     wsConnected: false,
     wsReconnecting: false,
     reconnectTimer: null,
@@ -1615,7 +1573,6 @@
     btnSubmitTest: document.getElementById('btn-submit-test'),
     btnTestPanel: document.getElementById('btn-test-panel'),
     emptyBtnTest: document.getElementById('empty-btn-test'),
-    emptyBtnMock: document.getElementById('empty-btn-mock'),
 
     btnClearStream: document.getElementById('btn-clear-stream'),
     btnPauseStream: document.getElementById('btn-pause-stream'),
@@ -1628,9 +1585,7 @@
     connectionStatusPill: document.getElementById('connection-status-pill'),
     connectionDot: document.getElementById('connection-dot'),
     connectionLabel: document.getElementById('connection-label'),
-    modeBtnLive: document.getElementById('mode-btn-live'),
-    modeBtnMock: document.getElementById('mode-btn-mock'),
-    
+
     streamScrollContainer: document.getElementById('stream-scroll-container'),
     streamEntriesContainer: document.getElementById('stream-entries-container'),
     streamEmptyState: document.getElementById('stream-empty-state'),
@@ -1667,49 +1622,6 @@
   };
 
   /* --------------------------------------------------------------------------
-     DEFAULT / MOCK CATALOG
-     -------------------------------------------------------------------------- */
-  const DEFAULT_CATALOG = {
-    groups: [
-      {
-        package: "quotation.extraction",
-        functions: [
-          { id: "app.quotation.extraction.pipeline:run_pipeline", name: "run_pipeline", signature: "(raw_text: str, *, domain: str)", doc: "Executes the multi-stage extraction pipeline over raw text." },
-          { id: "app.quotation.extraction.pipeline:_process_chunk", name: "_process_chunk", signature: "(chunk: str, *, ontology: dict, domain: str)", doc: "Processes an isolated segment and maps it to domain entities." },
-          { id: "app.quotation.extraction.parser:extract_entities", name: "extract_entities", signature: "(text: str, schema: dict)", doc: "Invokes LLM extraction with JSON schema validation." },
-          { id: "app.quotation.extraction.normalizer:normalize_items", name: "normalize_items", signature: "(items: list[dict]) -> list[dict]", doc: "Standardizes extracted pricing line items and quantities." },
-          { id: "app.quotation.extraction.validator:validate_schema", name: "validate_schema", signature: "(payload: dict, target_model: str)", doc: "Strict validation against Pydantic domain models." }
-        ]
-      },
-      {
-        package: "quotation.graph",
-        functions: [
-          { id: "app.quotation.graph.builder:build_quotation_graph", name: "build_quotation_graph", signature: "(quotation_id: str, nodes: list)", doc: "Constructs DAG dependency graph for pricing calculations." },
-          { id: "app.quotation.graph.resolver:resolve_dependencies", name: "resolve_dependencies", signature: "(graph: DAG)", doc: "Resolves formula references and ordering constraints." },
-          { id: "app.quotation.graph.calculator:calculate_totals", name: "calculate_totals", signature: "(graph: DAG, context: dict)", doc: "Computes subtotal, taxes, volume discounts, and grand total." },
-          { id: "app.quotation.graph.commit:commit_graph", name: "commit_graph", signature: "(quotation_id: str, db_session)", doc: "Atomically commits quotation graph revision to DB." }
-        ]
-      },
-      {
-        package: "execution.chat",
-        functions: [
-          { id: "app.execution.chat.engine:execute_chat", name: "execute_chat", signature: "(session_id: str, prompt: str)", doc: "Entry point for conversational reasoning and function dispatch." },
-          { id: "app.execution.chat.context:retrieve_context", name: "retrieve_context", signature: "(session_id: str, top_k: int = 5)", doc: "Retrieves conversation history and semantic vector memories." },
-          { id: "app.execution.chat.formatter:format_response", name: "format_response", signature: "(result: dict, style: str = 'rich')", doc: "Formats agent action output into streaming chunks." }
-        ]
-      },
-      {
-        package: "core.llm",
-        functions: [
-          { id: "app.core.llm.client:call_model", name: "call_model", signature: "(messages: list, model: str, temperature: float = 0.0)", doc: "Direct gateway to LLM providers with automatic fallback." },
-          { id: "app.core.llm.structurer:structure_output", name: "structure_output", signature: "(raw_response: str, target_schema: type)", doc: "Parses model completions into strongly-typed Pydantic classes." },
-          { id: "app.core.llm.tokenizer:tokenize_prompt", name: "tokenize_prompt", signature: "(messages: list) -> int", doc: "Calculates exact token budgets and context window limits." }
-        ]
-      }
-    ]
-  };
-
-  /* --------------------------------------------------------------------------
      WEBSOCKET CONNECTION & NETWORKING
      -------------------------------------------------------------------------- */
   let socket = null;
@@ -1721,8 +1633,6 @@
   }
 
   function initWebSocket() {
-    if (state.isMockMode) return;
-    
     if (socket) {
       try { socket.close(); } catch (e) {}
       socket = null;
@@ -1768,9 +1678,7 @@
 
     socket.onclose = () => {
       state.wsConnected = false;
-      if (!state.isMockMode) {
-        scheduleReconnect();
-      }
+      scheduleReconnect();
     };
 
     socket.onerror = (err) => {
@@ -1781,7 +1689,7 @@
   }
 
   function scheduleReconnect() {
-    if (state.isMockMode || state.wsReconnecting) return;
+    if (state.wsReconnecting) return;
     state.wsReconnecting = true;
     updateConnectionUI('reconnecting', `Reconnecting (${Math.round(state.reconnectDelay/1000)}s)...`);
     
@@ -1794,10 +1702,6 @@
   }
 
   function sendClientMessage(msg) {
-    if (state.isMockMode) {
-      handleMockClientMessage(msg);
-      return;
-    }
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify(msg));
     }
@@ -1810,8 +1714,6 @@
       el.connectionStatusPill.style.borderColor = 'rgba(52, 211, 153, 0.3)';
     } else if (status === 'reconnecting') {
       el.connectionStatusPill.style.borderColor = 'rgba(251, 191, 36, 0.3)';
-    } else if (status === 'mock') {
-      el.connectionStatusPill.style.borderColor = 'rgba(192, 132, 252, 0.4)';
     } else {
       el.connectionStatusPill.style.borderColor = 'rgba(248, 113, 113, 0.3)';
     }
@@ -1825,16 +1727,13 @@
       const resp = await fetch('/viewer/terminal/functions');
       if (resp.ok) {
         const data = await resp.json();
-        if (data && data.groups && data.groups.length > 0) {
+        if (data && data.groups) {
           state.catalog = data;
-          renderCatalog();
-          return;
         }
       }
     } catch (e) {
-      console.log('Using default catalog fixtures (offline or local mode).');
+      console.warn('Could not load function catalog:', e);
     }
-    state.catalog = DEFAULT_CATALOG;
     renderCatalog();
   }
 
@@ -2673,304 +2572,6 @@
   }
 
   /* --------------------------------------------------------------------------
-     MOCK SIMULATION ENGINE (OFFLINE DEMO MODE)
-     -------------------------------------------------------------------------- */
-  let mockInterval = null;
-  let mockSeqCounter = 100;
-  let mockRequestCounter = 1;
-
-  function startMockEngine() {
-    state.isMockMode = true;
-    updateConnectionUI('mock', 'Mock Mode (Demo)');
-    el.modeBtnLive.classList.remove('active');
-    el.modeBtnMock.classList.add('active', 'mock-active');
-
-    // Close real WS if open
-    if (socket) {
-      try { socket.close(); } catch (e) {}
-      socket = null;
-    }
-
-    showToast('Switched to Mock Demo Mode');
-    triggerMockPipeline(); // run one immediately
-
-    clearInterval(mockInterval);
-    mockInterval = setInterval(() => {
-      if (state.isMockMode && !state.isStreamPaused) {
-        triggerMockPipeline();
-      }
-    }, 6000);
-  }
-
-  function stopMockEngine() {
-    state.isMockMode = false;
-    clearInterval(mockInterval);
-    mockInterval = null;
-    el.modeBtnMock.classList.remove('active', 'mock-active');
-    el.modeBtnLive.classList.add('active');
-    initWebSocket();
-  }
-
-  function triggerMockPipeline(customDomain, customPrompt) {
-    const reqNum = mockRequestCounter++;
-    const reqId = `req_${String(reqNum).padStart(4, '0')}`;
-    const baseTs = Date.now() / 1000;
-    const isErrorFlow = (reqNum % 3 === 0);
-    const domain = customDomain || (reqNum % 2 === 0 ? 'execution' : 'quotation');
-    const prompt = customPrompt || (isErrorFlow 
-      ? 'Calculate price with missing unit_price parameter' 
-      : 'Extract commercial terms and pricing schedule from RFP contract');
-
-    const scriptedEvents = [
-      // 1. Request Start
-      {
-        kind: 'request.start',
-        request_id: reqId,
-        seq: ++mockSeqCounter,
-        ts: baseTs,
-        data: {
-          method: 'POST',
-          path: `/${domain}/context/ctx_${reqNum}/chat`,
-          summary: `${domain} chat pipeline`
-        }
-      },
-      // 2. Log
-      {
-        kind: 'log',
-        request_id: reqId,
-        seq: ++mockSeqCounter,
-        ts: baseTs + 0.02,
-        data: { level: 'info', line: `--> received POST /${domain}/context/ctx_${reqNum}/chat (session_id=sess_${reqNum})` }
-      },
-      // 3. Top-level pipeline start (Depth 1)
-      {
-        kind: 'fn.start',
-        request_id: reqId,
-        span_id: `sp_${reqNum}_1`,
-        parent_span_id: null,
-        seq: ++mockSeqCounter,
-        ts: baseTs + 0.05,
-        depth: 1,
-        data: {
-          name: 'app.quotation.extraction.pipeline:run_pipeline',
-          qualname: 'run_pipeline',
-          module: 'app.quotation.extraction.pipeline',
-          signature: '(raw_text: str, *, domain: str = "quotation")',
-          args: { raw_text: prompt.slice(0, 50) + '...', domain: domain },
-          args_truncated: true
-        }
-      },
-      // 4. Processing chunk (Depth 2)
-      {
-        kind: 'fn.start',
-        request_id: reqId,
-        span_id: `sp_${reqNum}_2`,
-        parent_span_id: `sp_${reqNum}_1`,
-        seq: ++mockSeqCounter,
-        ts: baseTs + 0.12,
-        depth: 2,
-        data: {
-          name: 'app.quotation.extraction.pipeline:_process_chunk',
-          qualname: '_process_chunk',
-          module: 'app.quotation.extraction.pipeline',
-          signature: '(chunk: str, *, ontology: dict, domain: str)',
-          args: { chunk: prompt, ontology: { type: 'RFP_Contract', version: 2 }, domain: domain },
-          args_truncated: false
-        }
-      },
-      // 5. LLM Call (Depth 3)
-      {
-        kind: 'llm.call',
-        request_id: reqId,
-        span_id: `sp_${reqNum}_3`,
-        parent_span_id: `sp_${reqNum}_2`,
-        seq: ++mockSeqCounter,
-        ts: baseTs + 0.35,
-        depth: 3,
-        data: {
-          label: 'structuring',
-          model: 'gpt-4o',
-          duration_ms: 1850,
-          tokens: { in: 1240, out: 380 },
-          messages: [
-            { role: 'system', content: 'You are an AI quotation graph extraction engine. Extract JSON entities matching Ontology schema.' },
-            { role: 'user', content: `Please structure the following request payload:\n\n${prompt}` }
-          ],
-          raw_text: '```json\n{\n  "entities": [\n    {"name": "Server Cluster", "qty": 4, "unit_price": 2400.0},\n    {"name": "Support SLA Gold", "qty": 1, "unit_price": 12000.0}\n  ],\n  "currency": "USD",\n  "tax_rate": 0.0825\n}\n```',
-          parsed: {
-            entities: [
-              { name: 'Server Cluster', qty: 4, unit_price: 2400.0, total: 9600.0 },
-              { name: 'Support SLA Gold', qty: 1, unit_price: 12000.0, total: 12000.0 }
-            ],
-            currency: 'USD',
-            tax_rate: 0.0825,
-            subtotal: 21600.0,
-            grand_total: 23382.0
-          }
-        }
-      }
-    ];
-
-    if (isErrorFlow) {
-      // Error path
-      scriptedEvents.push(
-        {
-          kind: 'fn.error',
-          request_id: reqId,
-          span_id: `sp_${reqNum}_4`,
-          parent_span_id: `sp_${reqNum}_2`,
-          seq: ++mockSeqCounter,
-          ts: baseTs + 2.25,
-          depth: 3,
-          data: {
-            name: 'app.quotation.graph.calculator:calculate_totals',
-            qualname: 'calculate_totals',
-            exc_type: 'ValidationError',
-            message: "Missing required field 'unit_price' in item line 4",
-            duration_ms: 14,
-            traceback: `Traceback (most recent call last):\n  File "/app/quotation/graph/calculator.py", line 84, in calculate_totals\n    val = float(item["unit_price"]) * item["qty"]\nKeyError: 'unit_price'\n\nDuring handling of the above exception, another exception occurred:\n\npydantic.error_wrappers.ValidationError: 1 validation error for QuotationItem\nunit_price\n  field required (type=value_error.missing)`
-          }
-        },
-        {
-          kind: 'fn.end',
-          request_id: reqId,
-          span_id: `sp_${reqNum}_2`,
-          seq: ++mockSeqCounter,
-          ts: baseTs + 2.30,
-          depth: 2,
-          data: {
-            name: 'app.quotation.extraction.pipeline:_process_chunk',
-            duration_ms: 2180,
-            result: { error: 'ValidationError in calculate_totals' },
-            result_truncated: false
-          }
-        },
-        {
-          kind: 'fn.end',
-          request_id: reqId,
-          span_id: `sp_${reqNum}_1`,
-          seq: ++mockSeqCounter,
-          ts: baseTs + 2.35,
-          depth: 1,
-          data: {
-            name: 'app.quotation.extraction.pipeline:run_pipeline',
-            duration_ms: 2300,
-            result: { success: false, status: 500 },
-            result_truncated: false
-          }
-        },
-        {
-          kind: 'request.end',
-          request_id: reqId,
-          seq: ++mockSeqCounter,
-          ts: baseTs + 2.40,
-          data: { status: 500, duration_ms: 2400 }
-        }
-      );
-    } else {
-      // Normal Success path
-      scriptedEvents.push(
-        {
-          kind: 'fn.start',
-          request_id: reqId,
-          span_id: `sp_${reqNum}_4`,
-          parent_span_id: `sp_${reqNum}_2`,
-          seq: ++mockSeqCounter,
-          ts: baseTs + 2.22,
-          depth: 3,
-          data: {
-            name: 'app.quotation.graph.builder:build_quotation_graph',
-            qualname: 'build_quotation_graph',
-            module: 'app.quotation.graph.builder',
-            signature: '(quotation_id: str, nodes: list)',
-            args: { quotation_id: `q_${reqNum}`, nodes_count: 2 },
-            args_truncated: false
-          }
-        },
-        {
-          kind: 'fn.end',
-          request_id: reqId,
-          span_id: `sp_${reqNum}_4`,
-          seq: ++mockSeqCounter,
-          ts: baseTs + 2.55,
-          depth: 3,
-          data: {
-            name: 'app.quotation.graph.builder:build_quotation_graph',
-            duration_ms: 330,
-            result: { graph_id: `dag_${reqNum}`, status: 'RESOLVED', total_nodes: 8 },
-            result_truncated: false
-          }
-        },
-        {
-          kind: 'fn.end',
-          request_id: reqId,
-          span_id: `sp_${reqNum}_2`,
-          seq: ++mockSeqCounter,
-          ts: baseTs + 2.65,
-          depth: 2,
-          data: {
-            name: 'app.quotation.extraction.pipeline:_process_chunk',
-            duration_ms: 2530,
-            result: { chunk_index: 0, entities_found: 2, status: 'PROCESSED' },
-            result_truncated: false
-          }
-        },
-        {
-          kind: 'fn.end',
-          request_id: reqId,
-          span_id: `sp_${reqNum}_1`,
-          seq: ++mockSeqCounter,
-          ts: baseTs + 2.75,
-          depth: 1,
-          data: {
-            name: 'app.quotation.extraction.pipeline:run_pipeline',
-            duration_ms: 2700,
-            result: { quotation_id: `q_${reqNum}`, subtotal: 21600.0, grand_total: 23382.0 },
-            result_truncated: true
-          }
-        },
-        {
-          kind: 'request.end',
-          request_id: reqId,
-          seq: ++mockSeqCounter,
-          ts: baseTs + 2.80,
-          data: { status: 200, duration_ms: 2800 }
-        }
-      );
-    }
-
-    // Play events with slight realistic delays
-    let delay = 0;
-    scriptedEvents.forEach((ev, i) => {
-      delay += (i === 0 ? 0 : (i === 4 ? 600 : 150));
-      setTimeout(() => {
-        handleIncomingMessage(ev);
-      }, delay);
-    });
-  }
-
-  function handleMockClientMessage(msg) {
-    if (msg.op === 'select') {
-      // Mock acknowledge
-      console.log('[Mock WS] selection updated:', msg.functions?.length);
-    } else if (msg.op === 'get_value') {
-      setTimeout(() => {
-        handleIncomingMessage({
-          kind: 'value',
-          span_id: msg.span_id,
-          field: msg.field,
-          value: msg.field === 'args' 
-            ? { full_document: "This is the complete untruncated quotation document with 40 line items, terms, signature requirements, and warranty schedules.", encoding: "utf-8", priority: 1 }
-            : { quotation_id: "q_FULL_UNTRUNCATED_998", items: Array.from({ length: 15 }, (_, i) => ({ id: i + 1, item: `SKU-PROD-${100+i}`, qty: 2 + i, price: 450.0 + (i*10) })), total_net: 48950.0 }
-        });
-      }, 300);
-    } else if (msg.op === 'run_test') {
-      showToast(`Test triggered in domain: ${msg.domain}`);
-      triggerMockPipeline(msg.domain, msg.message);
-    }
-  }
-
-  /* --------------------------------------------------------------------------
      KEYBOARD SHORTCUTS & EVENT LISTENERS
      -------------------------------------------------------------------------- */
   function setupEventListeners() {
@@ -2998,10 +2599,6 @@
 
     el.emptyBtnTest.addEventListener('click', () => {
       el.btnTestPanel.click();
-    });
-
-    el.emptyBtnMock.addEventListener('click', () => {
-      startMockEngine();
     });
 
     // Test Request Submit
@@ -3084,10 +2681,6 @@
 
     // Inspector Close
     el.btnCloseInspector.addEventListener('click', closeInspector);
-
-    // Live / Mock Toggle buttons
-    el.modeBtnLive.addEventListener('click', stopMockEngine);
-    el.modeBtnMock.addEventListener('click', startMockEngine);
 
     // Shortcuts Modal
     el.btnShortcuts.addEventListener('click', () => el.shortcutsModal.classList.remove('hidden'));
@@ -3355,14 +2948,7 @@
   async function init() {
     setupEventListeners();
     await loadCatalog();
-
-    // Check if offline/demo parameter or live
-    const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.get('mock') === 'true' || window.location.protocol === 'file:') {
-      startMockEngine();
-    } else {
-      initWebSocket();
-    }
+    initWebSocket();
   }
 
   // Launch on DOM ready
