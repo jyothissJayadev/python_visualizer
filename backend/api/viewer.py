@@ -71,8 +71,9 @@ class TelemetryHub:
 
     # -- ingest --------------------------------------------------------
     def register(self, *, brain_base_url, started_at, code_fingerprint) -> None:
-        if brain_base_url:
-            self.brain_base_url = brain_base_url.rstrip("/")
+        cleaned = _clean_url(brain_base_url)
+        if cleaned:
+            self.brain_base_url = cleaned
         self.registered_at = started_at
         self.brain_fingerprint = code_fingerprint
         self.stats["registers"] += 1
@@ -202,19 +203,24 @@ def _fn_entry(module: str, fn: Any, class_name: str | None) -> dict[str, Any]:
 @router.post("/viewer/terminal/ingest")
 async def ingest(payload: dict):
     if payload.get("kind") == "register":
+        # brain re-sends this handshake every ~30s; only surface a log line
+        # the first time or when brain actually restarts (new started_at) —
+        # the rest are silent heartbeats.
+        is_new = payload.get("started_at") != HUB.registered_at
         HUB.register(
             brain_base_url=payload.get("brain_base_url"),
             started_at=payload.get("started_at"),
             code_fingerprint=payload.get("code_fingerprint"),
         )
-        await HUB.broadcast(
-            {
-                "kind": "log",
-                "request_id": "system",
-                "ts": _now(),
-                "data": {"level": "info", "line": f"brain registered ({HUB.brain_base_url})"},
-            }
-        )
+        if is_new:
+            await HUB.broadcast(
+                {
+                    "kind": "log",
+                    "request_id": "system",
+                    "ts": _now(),
+                    "data": {"level": "info", "line": f"brain registered ({HUB.brain_base_url})"},
+                }
+            )
         await HUB.broadcast({"kind": "code_status", "in_sync": _code_in_sync(), "brain": HUB.brain_fingerprint})
         # re-arm whatever the dashboard last applied (brain restart / fresh connect)
         if HUB.selection:
@@ -257,7 +263,17 @@ async def _handle_client_op(ws: WebSocket, data: dict) -> None:
         await _proxy_get_value(ws, data)
     elif op == "run_test":
         await _run_test(ws, data)
+    elif op == "clear":
+        await _clear_buffer()
     # legacy no-ops: select / set_verbosity (arming is the filter now)
+
+
+async def _clear_buffer() -> None:
+    """Drop the replay buffer so a dashboard refresh doesn't re-hydrate
+    events the user just cleared, and tell every other connected dashboard
+    to clear its view too."""
+    HUB.recent.clear()
+    await HUB.broadcast({"kind": "cleared"})
 
 
 async def _apply_selection(ws: WebSocket, selections: list[dict]) -> None:
@@ -367,3 +383,15 @@ def _now() -> float:
     import time
 
     return time.time()
+
+
+def _clean_url(value: Any) -> str | None:
+    """Tolerate a base URL that arrived with a trailing inline comment or
+    stray whitespace (e.g. ``set VAR=http://host  # note`` on Windows keeps
+    the note in the value). Cut at the first whitespace or ``#`` and trim a
+    trailing slash. Returns None for anything that doesn't look like http(s)."""
+    if not value or not isinstance(value, str):
+        return None
+    head = value.strip().split("#", 1)[0].split()[0] if value.strip() else ""
+    head = head.rstrip("/")
+    return head if head.startswith(("http://", "https://")) else None

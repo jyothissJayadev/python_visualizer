@@ -82,6 +82,8 @@ export interface Snapshot {
   requests: RequestView[];
   spans: Map<string, SpanData>;
   requestMeta: Map<string, RequestData>;
+  collapsedSpanIds: Set<string>;
+  spanChildCounts: Map<string, number>;
 
   selectedSpanId: string | null;
   llmTab: LlmTab;
@@ -116,6 +118,9 @@ export class TerminalStore {
   private selectedFunctions = new Set<string>();
   private functionModes = new Map<string, "deep">();
   private appliedSelection = new Set<string>();
+  // ids that were deep *at the moment Apply was pressed* — snapshotted so
+  // toggling deep on an already-armed function is detected as "dirty".
+  private appliedModes = new Set<string>();
   private unresolvedIds = new Set<string>();
   private catalogSearchQuery = "";
   private collapsedPackages = new Set<string>(); // holds "OPEN:<pkg>" once expanded
@@ -130,6 +135,7 @@ export class TerminalStore {
   private seenCount = 0;
 
   private loopGroups = new Map<string, LoopGroup>();
+  private collapsedSpanIds = new Set<string>();
   private selectedSpanId: string | null = null;
   private llmTab: LlmTab = "parsed";
   private toast: ToastState | null = null;
@@ -216,6 +222,13 @@ export class TerminalStore {
       const m = raw as CodeStatusMessage;
       this.codeInSync = m.in_sync;
       this.brainFingerprint = m.brain;
+      this.emitNow();
+      return;
+    }
+    if (msg.kind === "cleared") {
+      // Another dashboard (or a reconnect after our own clear) wiped the
+      // buffer — mirror it locally without echoing the op back.
+      this.resetStreamState();
       this.emitNow();
       return;
     }
@@ -353,6 +366,9 @@ export class TerminalStore {
     const payload = this.buildSelectionPayload(this.selectedFunctions);
     this.send({ op: "apply_selection", selections: payload });
     this.appliedSelection = new Set(this.selectedFunctions);
+    this.appliedModes = new Set(
+      payload.filter((p) => p.deep).map((p) => p.id),
+    );
     this.persistSelection();
     this.pushToast(
       payload.length
@@ -382,6 +398,7 @@ export class TerminalStore {
           selected: Array.from(this.selectedFunctions),
           deep: Array.from(this.functionModes.keys()),
           applied: Array.from(this.appliedSelection),
+          appliedDeep: Array.from(this.appliedModes),
         }),
       );
     } catch {
@@ -395,6 +412,7 @@ export class TerminalStore {
       (raw.selected || []).forEach((id: string) => this.selectedFunctions.add(id));
       (raw.deep || []).forEach((id: string) => this.functionModes.set(id, "deep"));
       (raw.applied || []).forEach((id: string) => this.appliedSelection.add(id));
+      (raw.appliedDeep || []).forEach((id: string) => this.appliedModes.add(id));
     } catch {
       /* ignore */
     }
@@ -406,8 +424,8 @@ export class TerminalStore {
     this.verbosity = level;
     this.pushToast(
       level === "selected"
-        ? "Showing selected functions only"
-        : "Showing all traced calls (incl. deep children)",
+        ? "Showing only the exact functions you armed"
+        : "Showing armed functions + every nested call under them",
     );
     this.emitNow();
   }
@@ -416,7 +434,7 @@ export class TerminalStore {
     this.loopFold = !this.loopFold;
     this.pushToast(
       this.loopFold
-        ? `Loops folded (runs of ${LOOP_COLLAPSE_THRESHOLD}+ identical calls)`
+        ? `Loops folded — runs of ${LOOP_COLLAPSE_THRESHOLD}+ identical calls collapse to one row (click to expand)`
         : "Loops unfolded — every iteration shown",
     );
     this.emitNow();
@@ -426,8 +444,8 @@ export class TerminalStore {
     this.selectedOnly = !this.selectedOnly;
     this.pushToast(
       this.selectedOnly
-        ? "Hiding requests where none of your selected functions ran"
-        : "Showing every request and log line",
+        ? "Focus mode: only armed calls and their nested calls — other requests and rows hidden"
+        : "Showing every request, call and log line",
     );
     this.emitNow();
   }
@@ -449,16 +467,27 @@ export class TerminalStore {
     this.emitNow();
   }
 
-  clearStream() {
+  /** Wipe every stream-derived buffer. Shared by the Clear button and an
+      incoming `cleared` broadcast. */
+  private resetStreamState() {
     this.events = [];
     this.spans.clear();
     this.requests.clear();
     this.reqOrder = [];
     this.loopGroups.clear();
+    this.collapsedSpanIds.clear();
     this.spanCounter = 0;
     this.selectedSpanId = null;
+    this.focusedIndex = -1;
     this.pausedLen = this.paused ? 0 : null;
     this.seenCount = 0;
+  }
+
+  clearStream() {
+    this.resetStreamState();
+    // Also drop the collector's replay buffer so a page refresh doesn't
+    // re-hydrate what we just cleared, and clear other open dashboards.
+    this.send({ op: "clear" });
     this.emitNow();
   }
 
@@ -492,21 +521,35 @@ export class TerminalStore {
     this.emitNow();
   }
 
-  loopStep(key: string, delta: number) {
-    const g = this.loopGroups.get(key);
-    if (!g) return;
-    const n = g.memberSpanIds.length;
-    if (!n) return;
-    g.currentIndex = (g.currentIndex + delta + n) % n;
-    g.expanded = false;
-    this.selectedSpanId = g.memberSpanIds[g.currentIndex];
-    this.emitNow();
-  }
-
   loopToggleExpand(key: string) {
     const g = this.loopGroups.get(key);
     if (!g) return;
     g.expanded = !g.expanded;
+    this.emitNow();
+  }
+
+  toggleSpanCollapse(spanId: string) {
+    if (this.collapsedSpanIds.has(spanId)) {
+      this.collapsedSpanIds.delete(spanId);
+    } else {
+      this.collapsedSpanIds.add(spanId);
+    }
+    this.emitNow();
+  }
+
+  collapseAllDeepSpans() {
+    for (const span of this.spans.values()) {
+      if (span.parent_span_id) {
+        this.collapsedSpanIds.add(span.parent_span_id);
+      }
+    }
+    this.pushToast("Collapsed all inner deep function calls");
+    this.emitNow();
+  }
+
+  expandAllDeepSpans() {
+    this.collapsedSpanIds.clear();
+    this.pushToast("Expanded all inner deep function calls");
     this.emitNow();
   }
 
@@ -632,8 +675,51 @@ export class TerminalStore {
       }
     }
 
-    // loop groups — per request, over sibling spans in `order`
-    const hiddenByLoop = new Set<string>();
+    // ---- parent-child span hierarchy & collapse -----------------------
+    const childrenByParent = new Map<string, string[]>();
+    const spanChildCounts = new Map<string, number>();
+
+    for (const span of this.spans.values()) {
+      if (span.parent_span_id) {
+        const list = childrenByParent.get(span.parent_span_id) || [];
+        list.push(span.span_id);
+        childrenByParent.set(span.parent_span_id, list);
+      }
+    }
+
+    const getAllDescendants = (rootId: string): string[] => {
+      const desc: string[] = [];
+      const stack = [...(childrenByParent.get(rootId) || [])];
+      while (stack.length > 0) {
+        const cId = stack.pop()!;
+        desc.push(cId);
+        const sub = childrenByParent.get(cId);
+        if (sub) stack.push(...sub);
+      }
+      return desc;
+    };
+
+    for (const spanId of this.spans.keys()) {
+      const desc = getAllDescendants(spanId);
+      if (desc.length > 0) {
+        spanChildCounts.set(spanId, desc.length);
+      }
+    }
+
+    const hiddenByParentCollapse = new Set<string>();
+    for (const parentId of this.collapsedSpanIds) {
+      const desc = getAllDescendants(parentId);
+      desc.forEach((d) => hiddenByParentCollapse.add(d));
+    }
+
+    // ---- loop folding -------------------------------------------------
+    // A "loop" is a run of LOOP_COLLAPSE_THRESHOLD+ consecutive sibling
+    // spans that share a label. Collapsed, it is a single summary row and
+    // every member (and its subtree) is hidden. Expanded, all members
+    // render inline in order, each with its own args / return preview, and
+    // a nested run inside an iteration folds into its own sub-row.
+    const collapsedMembers = new Set<string>(); // member rows a collapsed group swallows
+    const hiddenByLoop = new Set<string>(); // spans under a *collapsed* member (incl. nested group rows)
     const firstMemberToGroup = new Map<string, LoopGroup>();
     const liveKeys = new Set<string>();
 
@@ -641,15 +727,26 @@ export class TerminalStore {
       for (const reqId of this.reqOrder) {
         const req = this.requests.get(reqId);
         if (!req) continue;
-        const childrenByParent = new Map<string, SpanData[]>();
+        const reqChildrenByParent = new Map<string, SpanData[]>();
         for (const sid of req.spanIds) {
           const sp = this.spans.get(sid);
           if (!sp) continue;
           const key = sp.parent_span_id || "__root__";
-          if (!childrenByParent.has(key)) childrenByParent.set(key, []);
-          childrenByParent.get(key)!.push(sp);
+          if (!reqChildrenByParent.has(key)) reqChildrenByParent.set(key, []);
+          reqChildrenByParent.get(key)!.push(sp);
         }
-        childrenByParent.forEach((kids) => {
+        const descendantsOf = (rootId: string): string[] => {
+          const out: string[] = [];
+          const stack = [...(reqChildrenByParent.get(rootId) || [])];
+          while (stack.length) {
+            const c = stack.pop()!;
+            out.push(c.span_id);
+            const gk = reqChildrenByParent.get(c.span_id);
+            if (gk) stack.push(...gk);
+          }
+          return out;
+        };
+        reqChildrenByParent.forEach((kids) => {
           kids.sort((a, b) => a.order - b.order);
           let i = 0;
           while (i < kids.length) {
@@ -662,38 +759,18 @@ export class TerminalStore {
               liveKeys.add(key);
               let g = this.loopGroups.get(key);
               if (!g) {
-                g = {
-                  key,
-                  reqId,
-                  memberSpanIds: [],
-                  currentIndex: 0,
-                  expanded: false,
-                };
+                g = { key, reqId, memberSpanIds: [], expanded: false };
                 this.loopGroups.set(key, g);
               }
               g.memberSpanIds = members.map((m) => m.span_id);
-              if (g.currentIndex >= members.length)
-                g.currentIndex = members.length - 1;
               firstMemberToGroup.set(members[0].span_id, g);
 
-              const descendantsOf = (rootId: string): string[] => {
-                const out: string[] = [];
-                const stack = [...(childrenByParent.get(rootId) || [])];
-                while (stack.length) {
-                  const c = stack.pop()!;
-                  out.push(c.span_id);
-                  const gk = childrenByParent.get(c.span_id);
-                  if (gk) stack.push(...gk);
-                }
-                return out;
-              };
-              members.forEach((m, idx) => {
-                const visible = g!.expanded || idx === g!.currentIndex;
-                if (!visible) {
-                  hiddenByLoop.add(m.span_id);
+              if (!g.expanded) {
+                members.forEach((m) => {
+                  collapsedMembers.add(m.span_id);
                   descendantsOf(m.span_id).forEach((s) => hiddenByLoop.add(s));
-                }
-              });
+                });
+              }
             }
             i = j;
           }
@@ -704,10 +781,26 @@ export class TerminalStore {
     for (const key of [...this.loopGroups.keys()])
       if (!liveKeys.has(key)) this.loopGroups.delete(key);
 
-    // rows, per request, in arrival order
+    // ---- "Selected only": keep just the armed calls and their subtrees --
     const gate = this.selectedOnly && this.appliedSelection.size > 0;
+    const inSelectedSubtree = new Set<string>();
+    if (gate) {
+      const ordered = [...this.spans.values()].sort((a, b) => a.order - b.order);
+      for (const sp of ordered) {
+        const label = this.spanLabel(sp);
+        if (
+          (label != null && this.appliedSelection.has(label)) ||
+          (sp.parent_span_id != null && inSelectedSubtree.has(sp.parent_span_id))
+        ) {
+          inSelectedSubtree.add(sp.span_id);
+        }
+      }
+    }
+
+    // rows, per request, in arrival order
     const requests: RequestView[] = [];
     let activeRequests = 0;
+    const spanGated = (id: string) => gate && !inSelectedSubtree.has(id);
 
     for (const reqId of this.reqOrder) {
       const req = this.requests.get(reqId)!;
@@ -719,26 +812,34 @@ export class TerminalStore {
         const depth = ev.depth || 0;
 
         if (ev.kind === "fn.start" && ev.span_id) {
+          if (hiddenByParentCollapse.has(ev.span_id)) continue;
           const grp = firstMemberToGroup.get(ev.span_id);
-          if (grp) {
-            const curId = grp.memberSpanIds[grp.currentIndex];
+          if (grp && !hiddenByLoop.has(ev.span_id) && !spanGated(ev.span_id)) {
             rows.push({
               rowKind: "loop",
               key: grp.key,
               group: grp,
               depth,
-              spanId: curId,
+              spanId: ev.span_id,
             });
           }
-          if (hiddenByLoop.has(ev.span_id)) continue;
+          if (hiddenByLoop.has(ev.span_id) || collapsedMembers.has(ev.span_id))
+            continue;
+          if (spanGated(ev.span_id)) continue;
           if (!this.eventFilterMatch(ev)) continue;
           rows.push({ rowKind: "fn", spanId: ev.span_id, depth });
         } else if (ev.kind === "fn.error" && ev.span_id) {
-          if (hiddenByLoop.has(ev.span_id)) continue;
+          if (hiddenByParentCollapse.has(ev.span_id)) continue;
+          if (hiddenByLoop.has(ev.span_id) || collapsedMembers.has(ev.span_id))
+            continue;
+          if (spanGated(ev.span_id)) continue;
           if (!this.eventFilterMatch(ev)) continue;
           rows.push({ rowKind: "error", spanId: ev.span_id, depth });
         } else if (ev.kind === "llm.call" && ev.span_id) {
-          if (hiddenByLoop.has(ev.span_id)) continue;
+          if (hiddenByParentCollapse.has(ev.span_id)) continue;
+          if (hiddenByLoop.has(ev.span_id) || collapsedMembers.has(ev.span_id))
+            continue;
+          if (spanGated(ev.span_id)) continue;
           if (!this.eventFilterMatch(ev)) continue;
           rows.push({ rowKind: "llm", spanId: ev.span_id, depth });
         } else if (ev.kind === "log") {
@@ -776,10 +877,7 @@ export class TerminalStore {
     const applied =
       Array.from(this.appliedSelection).sort().join("|") +
       "::" +
-      Array.from(this.appliedSelection)
-        .filter((id) => this.functionModes.get(id) === "deep")
-        .sort()
-        .join("|");
+      Array.from(this.appliedModes).sort().join("|");
 
     return {
       version: this.version,
@@ -808,6 +906,8 @@ export class TerminalStore {
       requests,
       spans: this.spans,
       requestMeta: this.requests,
+      collapsedSpanIds: new Set(this.collapsedSpanIds),
+      spanChildCounts,
       selectedSpanId: this.selectedSpanId,
       llmTab: this.llmTab,
       toast: this.toast,

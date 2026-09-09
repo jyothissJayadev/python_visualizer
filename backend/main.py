@@ -13,7 +13,6 @@ import os
 
 import uvicorn
 
-from backend.app import create_app
 from backend.config import DEFAULT_IGNORED_DIRECTORIES, ExplorerConfig
 
 
@@ -42,8 +41,22 @@ def parse_args(argv: list[str] | None = None) -> ExplorerConfig:
 
 def main(argv: list[str] | None = None) -> None:
     config = parse_args(argv)
-    app = create_app(config)
-    uvicorn.run(app, host=config.host, port=config.port)
+    # Hand the config to the app factory (backend.app:make_app) via env so
+    # uvicorn can own an import string and hot-reload on backend edits.
+    os.environ["BRAIN_TERMINAL_PROJECT"] = config.project_path
+    os.environ["BRAIN_TERMINAL_HOST"] = config.host
+    os.environ["BRAIN_TERMINAL_PORT"] = str(config.port)
+    os.environ["BRAIN_TERMINAL_IGNORE"] = os.pathsep.join(
+        sorted(config.ignored_directories - DEFAULT_IGNORED_DIRECTORIES)
+    )
+    uvicorn.run(
+        "backend.app:make_app",
+        factory=True,
+        host=config.host,
+        port=config.port,
+        reload=True,
+        reload_dirs=[os.path.dirname(__file__)],
+    )
 
 
 if __name__ == "__main__":

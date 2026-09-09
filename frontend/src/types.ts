@@ -85,10 +85,16 @@ export interface CodeStatusMessage {
   brain: string | null;
 }
 
+/** Another dashboard (or this one) cleared the stream; wipe local state. */
+export interface ClearedMessage {
+  kind: "cleared";
+}
+
 export type IncomingMessage =
   | ValueMessage
   | SelectionAppliedMessage
   | CodeStatusMessage
+  | ClearedMessage
   | TraceEvent;
 
 export interface ApplySelectionOp {
@@ -107,7 +113,10 @@ export interface RunTestOp {
   message: string;
   session_id: string | null;
 }
-export type ClientOp = ApplySelectionOp | GetValueOp | RunTestOp;
+export interface ClearOp {
+  op: "clear";
+}
+export type ClientOp = ApplySelectionOp | GetValueOp | RunTestOp | ClearOp;
 
 /* ---- function catalogue ---- */
 
@@ -166,6 +175,5 @@ export interface LoopGroup {
   key: string;
   reqId: string;
   memberSpanIds: string[];
-  currentIndex: number;
   expanded: boolean;
 }

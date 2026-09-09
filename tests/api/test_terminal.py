@@ -72,6 +72,39 @@ def test_register_stores_fingerprint_and_status(client):
     assert status["registers"] == 1
 
 
+def test_register_tolerates_url_with_trailing_comment(client):
+    # `set BRAIN_TELEMETRY_SELF_URL=http://host  # note` on Windows keeps the
+    # note in the value — the collector must still recover a usable base URL.
+    _register(client, base_url="http://127.0.0.1:8000   # brain's own base URL")
+    assert client.get("/viewer/terminal/status").json()["brain_base_url"] == "http://127.0.0.1:8000"
+
+
+def test_register_logs_once_then_heartbeats_are_silent(client):
+    with client.websocket_connect("/viewer/terminal/ws") as ws:
+        ws.receive_json()  # code_status on connect
+
+        _register(client)  # first registration → visible log line
+        first = ws.receive_json()
+        assert first["kind"] == "log" and "brain registered" in first["data"]["line"]
+        assert ws.receive_json()["kind"] == "code_status"
+
+        _register(client)  # same started_at → heartbeat, no log line
+        assert ws.receive_json()["kind"] == "code_status"
+
+        _register(client, fp="git:restarted", base_url="http://127.0.0.1:8000")
+        # still the same started_at in the helper → still silent
+        assert ws.receive_json()["kind"] == "code_status"
+
+        # a real restart (new started_at) logs again
+        client.post(
+            "/viewer/terminal/ingest",
+            json={"kind": "register", "brain_base_url": "http://127.0.0.1:8000",
+                  "started_at": "2026-09-06T00:00:00+00:00", "code_fingerprint": "git:abc"},
+        )
+        again = ws.receive_json()
+        assert again["kind"] == "log" and "brain registered" in again["data"]["line"]
+
+
 def test_apply_selection_without_brain_reports_error(client):
     with client.websocket_connect("/viewer/terminal/ws") as ws:
         ws.receive_json()  # code_status on connect
@@ -103,6 +136,27 @@ def test_events_broadcast_and_tail_replays(client):
         )
         live = ws.receive_json()
     assert live["kind"] == "fn.start"
+
+
+def test_clear_op_drops_buffer_and_broadcasts(client):
+    client.post(
+        "/viewer/terminal/ingest",
+        json={"kind": "events", "events": [
+            {"kind": "request.start", "request_id": "req_1", "seq": 1, "data": {"method": "GET", "path": "/x"}},
+        ]},
+    )
+    assert len(viewer.HUB.recent) == 1
+    with client.websocket_connect("/viewer/terminal/ws") as ws:
+        ws.receive_json()  # code_status
+        ws.receive_json()  # replayed req_1
+        ws.send_json({"op": "clear"})
+        cleared = ws.receive_json()
+    assert cleared["kind"] == "cleared"
+    assert len(viewer.HUB.recent) == 0
+
+    # a fresh dashboard now replays nothing
+    with client.websocket_connect("/viewer/terminal/ws") as ws2:
+        assert ws2.receive_json()["kind"] == "code_status"
 
 
 def test_get_value_without_brain_replies_error(client):

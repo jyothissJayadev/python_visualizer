@@ -2,8 +2,16 @@ import { store } from "../lib/store";
 import { useTerminal } from "../lib/useTerminal";
 import type { Snapshot } from "../lib/store";
 import type { SpanData } from "../types";
-import { formatDuration, renderValueText } from "../lib/format";
-import { JsonHighlight } from "./JsonHighlight";
+import {
+  asJsonValue,
+  decodeHtmlEntities,
+  formatArgsPreview,
+  formatDuration,
+  getDurationBadgeClass,
+  getFunctionTrackInfo,
+  toPrettyJson,
+} from "../lib/format";
+import { ValueView } from "./JsonHighlight";
 
 function copy(text: string, msg: string) {
   if (!text) return;
@@ -11,6 +19,22 @@ function copy(text: string, msg: string) {
     () => store.pushToast(msg),
     () => store.pushToast("Copy failed"),
   );
+}
+
+function getValueTypeBadge(val: unknown): string | null {
+  if (val === undefined) return null;
+  if (val === null) return "null";
+  const shaped = asJsonValue(val);
+  const target = "json" in shaped ? shaped.json : val;
+  if (Array.isArray(target)) return `array [${target.length}]`;
+  if (target !== null && typeof target === "object") {
+    const keys = Object.keys(target);
+    return `dict {${keys.length}}`;
+  }
+  if (typeof target === "number") return "number";
+  if (typeof target === "boolean") return "boolean";
+  if (typeof target === "string") return `str (${target.length} chars)`;
+  return null;
 }
 
 function spanDuration(span: SpanData): number {
@@ -77,20 +101,117 @@ function Breadcrumbs({ span, snap }: { span: SpanData; snap: Snapshot }) {
   );
 }
 
+function NestedCalls({ span, snap }: { span: SpanData; snap: Snapshot }) {
+  const children = [...snap.spans.values()]
+    .filter((sp) => sp.parent_span_id === span.span_id)
+    .sort((a, b) => a.order - b.order);
+  if (children.length === 0) return null;
+
+  const isCollapsed = snap.collapsedSpanIds.has(span.span_id);
+
+  return (
+    <div className="io-card">
+      <div className="io-card-header">
+        <span>NESTED CALLS ({children.length})</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <button
+            className={"btn-sm" + (isCollapsed ? " active" : "")}
+            style={{ fontSize: 10, padding: "2px 8px" }}
+            title={
+              isCollapsed
+                ? "Expand nested calls in the Trace Stream"
+                : "Collapse nested calls in the Trace Stream"
+            }
+            onClick={() => store.toggleSpanCollapse(span.span_id)}
+          >
+            {isCollapsed ? "▸ Expand in Trace" : "▾ Collapse in Trace"}
+          </button>
+          <span className="badge badge-dim" style={{ fontSize: 10 }}>
+            click to drill in
+          </span>
+        </div>
+      </div>
+      <div className="io-card-content">
+        <div className="nested-calls-list">
+          {children.map((c) => {
+            const cd = c.startEvent?.data || {};
+            const ed = c.endEvent?.data;
+            const errd = c.errorEvent?.data;
+            const dur =
+              ed?.duration_ms ?? errd?.duration_ms ?? c.llmEvent?.data?.duration_ms ?? 0;
+            const args = formatArgsPreview(cd.args);
+            const childTrack = getFunctionTrackInfo(c, snap);
+            let ret = "";
+            if (ed && ed.result !== undefined) {
+              const raw = decodeHtmlEntities(JSON.stringify(ed.result));
+              if (raw && raw !== "{}")
+                ret = `→ ${raw.slice(0, 60)}${raw.length > 60 ? "…" : ""}`;
+            }
+            return (
+              <button
+                key={c.span_id}
+                className={
+                  "nested-call-row" +
+                  (errd ? " has-error" : "") +
+                  (childTrack.isMain ? " nested-target-row" : "")
+                }
+                onClick={() => store.selectSpan(c.span_id)}
+              >
+                <span className="nested-call-name">
+                  {errd ? "⚠️ " : ""}
+                  {childTrack.isMain && (
+                    <span className="nested-target-tag" title="Tracked Target Function">
+                      🎯
+                    </span>
+                  )}
+                  {shortName(c)}
+                </span>
+                {args && <span className="nested-call-args">{args}</span>}
+                {ret && <span className="nested-call-ret">{ret}</span>}
+                {errd && (
+                  <span className="nested-call-err">
+                    {errd.exc_type}: {errd.message}
+                  </span>
+                )}
+                <span className={"badge " + getDurationBadgeClass(dur)}>
+                  {ed || errd ? formatDuration(dur) : "running"}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function FunctionContent({ span }: { span: SpanData }) {
   const sd = span.startEvent?.data || {};
   const ed = span.endEvent?.data || {};
   const errd = span.errorEvent?.data || null;
 
+  const returnVal =
+    ed.result !== undefined
+      ? ed.result
+      : span.endEvent
+        ? null
+        : undefined;
+
+  const argsBadge = getValueTypeBadge(sd.args);
+  const resultBadge = getValueTypeBadge(returnVal);
+
   return (
     <>
       <div className="io-card">
         <div className="io-card-header">
-          <span>INPUT (Arguments)</span>
+          <div className="io-card-title-group">
+            <span>INPUT (Arguments)</span>
+            {argsBadge && <span className="type-badge">{argsBadge}</span>}
+          </div>
           <button
             className="btn-sm"
             onClick={() =>
-              copy(JSON.stringify(sd.args, null, 2), "Arguments copied")
+              copy(toPrettyJson(sd.args), "Arguments copied")
             }
           >
             Copy JSON
@@ -108,7 +229,7 @@ function FunctionContent({ span }: { span: SpanData }) {
               </button>
             </div>
           )}
-          <div className="value-box">{renderValueText(sd.args ?? {})}</div>
+          <ValueView value={sd.args ?? {}} />
         </div>
       </div>
 
@@ -146,11 +267,14 @@ function FunctionContent({ span }: { span: SpanData }) {
       ) : (
         <div className="io-card">
           <div className="io-card-header">
-            <span>OUTPUT (Return Value)</span>
+            <div className="io-card-title-group">
+              <span>OUTPUT (Return Value)</span>
+              {resultBadge && <span className="type-badge">{resultBadge}</span>}
+            </div>
             <button
               className="btn-sm"
               onClick={() =>
-                copy(JSON.stringify(ed.result, null, 2), "Return value copied")
+                copy(toPrettyJson(ed.result), "Return value copied")
               }
             >
               Copy JSON
@@ -168,15 +292,15 @@ function FunctionContent({ span }: { span: SpanData }) {
                 </button>
               </div>
             )}
-            <div className="value-box">
-              {renderValueText(
+            <ValueView
+              value={
                 ed.result !== undefined
                   ? ed.result
                   : span.endEvent
                     ? null
-                    : "Call in progress...",
-              )}
-            </div>
+                    : "Call in progress..."
+              }
+            />
           </div>
         </div>
       )}
@@ -227,7 +351,7 @@ function LlmContent({ span, snap }: { span: SpanData; snap: Snapshot }) {
               copy(
                 snap.llmTab === "raw"
                   ? d.raw_text || ""
-                  : JSON.stringify(d.parsed, null, 2),
+                  : toPrettyJson(d.parsed),
                 `${snap.llmTab === "raw" ? "Raw text" : "Parsed JSON"} copied`,
               )
             }
@@ -251,9 +375,7 @@ function LlmContent({ span, snap }: { span: SpanData; snap: Snapshot }) {
             </button>
           </div>
           {snap.llmTab === "parsed" ? (
-            <div className="json-code-box">
-              <JsonHighlight value={d.parsed ?? {}} />
-            </div>
+            <ValueView value={d.parsed ?? {}} />
           ) : (
             <div
               className="json-code-box"
@@ -297,6 +419,7 @@ export function InspectorPane() {
 
   const llm = span?.llmEvent?.data || {};
   const tok = llm.tokens || { in: 0, out: 0 };
+  const track = getFunctionTrackInfo(span, s);
 
   return (
     <aside className={"inspector-pane" + (hidden ? " hidden" : "")}>
@@ -305,6 +428,18 @@ export function InspectorPane() {
           <div className="inspector-header">
             <div className="inspector-top-bar">
               <div className="inspector-title-wrap">
+                {track.isMain && (
+                  <span
+                    className={
+                      track.isDeep
+                        ? "badge badge-target-deep"
+                        : "badge badge-target"
+                    }
+                    title="Tracked Main Function"
+                  >
+                    {track.isDeep ? "⚡ DEEP TARGET" : "🎯 MAIN TARGET"}
+                  </span>
+                )}
                 <span
                   className={
                     "badge inspector-kind-badge " +
@@ -328,7 +463,7 @@ export function InspectorPane() {
               </div>
               <button
                 className="btn-icon"
-                title="Close Inspector (Esc)"
+                title="Close Inspector"
                 onClick={() => store.closeInspector()}
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -340,6 +475,29 @@ export function InspectorPane() {
           </div>
 
           <div className="inspector-body">
+            {track.isMain && (
+              <div className="main-fn-highlight-card">
+                <div className="main-fn-badge-row">
+                  <span className="badge badge-target">🎯 TRACKED MAIN FUNCTION</span>
+                  <span
+                    className={
+                      track.isDeep ? "badge badge-target-deep" : "badge badge-cyan"
+                    }
+                  >
+                    {track.isDeep
+                      ? "⚡ Deep Mode (Nested Tracing)"
+                      : "↳ Top-Level Mode"}
+                  </span>
+                  {track.isRoot && (
+                    <span className="badge badge-entry-root">Trace Entry Point</span>
+                  )}
+                </div>
+                <div className="main-fn-target-id">
+                  <code>{sd.name || `${moduleName}:${qualname}`}</code>
+                </div>
+              </div>
+            )}
+
             <div className="timing-card">
               <div className="timing-card-header">
                 <span>Execution Duration</span>
@@ -430,6 +588,7 @@ export function InspectorPane() {
               ) : (
                 <FunctionContent span={span} />
               )}
+              <NestedCalls span={span} snap={s} />
             </div>
           </div>
         </>

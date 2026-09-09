@@ -4,14 +4,12 @@ import { useTerminal } from "../lib/useTerminal";
 interface Props {
   catalogCollapsed: boolean;
   onToggleCatalog: () => void;
-  onOpenShortcuts: () => void;
   onSendTest: () => void;
 }
 
 export function Toolbar({
   catalogCollapsed,
   onToggleCatalog,
-  onOpenShortcuts,
   onSendTest,
 }: Props) {
   const s = useTerminal();
@@ -21,7 +19,7 @@ export function Toolbar({
       <div className="toolbar-left">
         <button
           className={"btn-icon" + (catalogCollapsed ? "" : " active")}
-          title="Toggle Function Catalog Rail (Ctrl+B)"
+          title="Toggle Function Catalog Rail"
           onClick={onToggleCatalog}
         >
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -36,16 +34,16 @@ export function Toolbar({
         </div>
 
         <div className="toolbar-actions">
-          <button className="btn-sm" title="Clear Stream (C)" onClick={() => store.clearStream()}>
+          <button className="btn-sm" title="Clear Stream" onClick={() => store.clearStream()}>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
             </svg>
-            Clear (C)
+            Clear
           </button>
 
           <button
             className={"btn-sm" + (s.paused ? " active" : "")}
-            title="Pause/Resume Stream (Space)"
+            title="Pause or Resume Stream"
             onClick={() => store.togglePause()}
           >
             <span>{s.paused ? "▶" : "⏸"}</span>
@@ -54,36 +52,55 @@ export function Toolbar({
 
           <div
             className="verbosity-segmented"
-            title="Show deep-mode child calls, or just the functions you selected"
+            title="Show only the exact functions you armed, or also every nested (deep-mode) call underneath them"
           >
             <button
               className={"verbosity-btn" + (s.verbosity === "selected" ? " active" : "")}
               onClick={() => store.setVerbosity("selected")}
             >
-              Selected
+              Armed only
             </button>
             <button
               className={"verbosity-btn" + (s.verbosity === "all" ? " active" : "")}
               onClick={() => store.setVerbosity("all")}
             >
-              + Deep children
+              + nested
             </button>
           </div>
 
           <button
             className={"btn-sm" + (s.loopFold ? " active" : "")}
-            title="Fold runs of 10+ identical sibling calls into one steppable row"
+            title="Fold runs of 10+ identical sibling calls into one row; click the row to expand every iteration"
             onClick={() => store.toggleLoopFold()}
           >
             <span>↻</span> Fold loops
           </button>
 
           <button
+            className={"btn-sm" + (s.collapsedSpanIds.size > 0 ? " active" : "")}
+            title={
+              s.collapsedSpanIds.size > 0
+                ? "Expand all inner deep calls across all traces"
+                : "Collapse all inner deep calls under parent functions"
+            }
+            onClick={() => {
+              if (s.collapsedSpanIds.size > 0) {
+                store.expandAllDeepSpans();
+              } else {
+                store.collapseAllDeepSpans();
+              }
+            }}
+          >
+            <span>{s.collapsedSpanIds.size > 0 ? "▸" : "▾"}</span>
+            <span>{s.collapsedSpanIds.size > 0 ? "Expand inner" : "Collapse inner"}</span>
+          </button>
+
+          <button
             className={"btn-sm" + (s.selectedOnly ? " active" : "")}
-            title="Hide requests (and their logs) in which none of your selected functions ran"
+            title="Show only requests where an armed function ran, and inside them only the armed calls and their nested calls — everything else is hidden"
             onClick={() => store.toggleSelectedOnly()}
           >
-            <span>≡</span> {s.selectedOnly ? "Selected only" : "All requests"}
+            <span>≡</span> {s.selectedOnly ? "Focus armed" : "Show all requests"}
           </button>
 
           <div className="search-filter-box">
@@ -119,13 +136,6 @@ export function Toolbar({
           />
           <span>{s.connectionLabel}</span>
         </div>
-
-        <button className="btn-sm btn-icon" title="Keyboard Shortcuts (?)" onClick={onOpenShortcuts}>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <circle cx="12" cy="12" r="10" />
-            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01" />
-          </svg>
-        </button>
       </div>
     </header>
   );

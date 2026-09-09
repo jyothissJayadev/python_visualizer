@@ -7,6 +7,7 @@ import {
   formatDuration,
   formatTimestamp,
   getDurationBadgeClass,
+  getFunctionTrackInfo,
 } from "../lib/format";
 import { TreeGuide } from "./TreeGuide";
 
@@ -20,10 +21,9 @@ function shortName(span: SpanData): string {
 interface RowProps {
   row: StreamRow;
   snap: Snapshot;
-  currentLoopMembers: Set<string>;
 }
 
-export function StreamRowSwitch({ row, snap, currentLoopMembers }: RowProps) {
+export function StreamRowSwitch({ row, snap }: RowProps) {
   if (row.rowKind === "log") {
     const level = (row.event.data?.level || "info").toLowerCase();
     return (
@@ -51,57 +51,52 @@ export function StreamRowSwitch({ row, snap, currentLoopMembers }: RowProps) {
     let total = 0;
     let errs = 0;
     let max = 0;
-    let cur: SpanData | undefined;
-    g.memberSpanIds.forEach((sid, idx) => {
+    let firstSpan: SpanData | undefined;
+    g.memberSpanIds.forEach((sid) => {
       const sp = snap.spans.get(sid);
       if (!sp) return;
+      if (!firstSpan) firstSpan = sp;
       const d =
         sp.endEvent?.data?.duration_ms ?? sp.errorEvent?.data?.duration_ms ?? 0;
       total += d;
       if (d > max) max = d;
       if (sp.errorEvent) errs++;
-      if (idx === g.currentIndex) cur = sp;
     });
     const avg = n ? Math.round(total / n) : 0;
-    const name = cur ? shortName(cur) : "loop";
+    const name = firstSpan ? shortName(firstSpan) : "loop";
+    const track = getFunctionTrackInfo(firstSpan, snap);
+
     return (
       <div
         className={
           "stream-row loop-group-row" +
-          (snap.selectedSpanId === row.spanId ? " selected" : "")
+          (g.expanded ? " expanded" : "") +
+          (track.isMain ? " row-main-fn" : "")
         }
+        title={
+          g.expanded
+            ? "Collapse this run"
+            : `Expand all ${n} iterations of ${name}()`
+        }
+        onClick={() => store.loopToggleExpand(g.key)}
       >
         <TreeGuide depth={row.depth} />
-        <span
-          className="loop-caret"
-          title="Expand / collapse all iterations"
-          onClick={() => store.loopToggleExpand(g.key)}
-        >
-          {g.expanded ? "▾" : "▸"}
-        </span>
+        <span className="loop-caret">{g.expanded ? "▾" : "▸"}</span>
         <div className="row-content" style={{ flex: "0 1 auto" }}>
+          {track.isMain && (
+            <span
+              className={track.isDeep ? "badge badge-target-deep" : "badge badge-target"}
+              title="Tracked Main Function Loop"
+            >
+              {track.isDeep ? "⚡ MAIN LOOP" : "🎯 MAIN LOOP"}
+            </span>
+          )}
           <span className="fn-name-label">
             <span className="loop-loop-icon">↻</span>
             <span>{name}()</span>
           </span>
+          <span className="loop-count">×{n}</span>
         </div>
-        <span className="loop-position">
-          {g.currentIndex + 1} / {n}
-        </span>
-        <button
-          className="loop-step-btn"
-          title="Previous iteration"
-          onClick={() => store.loopStep(g.key, -1)}
-        >
-          ‹ Prev
-        </button>
-        <button
-          className="loop-step-btn"
-          title="Next iteration"
-          onClick={() => store.loopStep(g.key, 1)}
-        >
-          Next ›
-        </button>
         <span className="loop-stats">
           Σ{formatDuration(total)} · avg {formatDuration(avg)} · max{" "}
           {formatDuration(max)}
@@ -112,13 +107,6 @@ export function StreamRowSwitch({ row, snap, currentLoopMembers }: RowProps) {
             </>
           )}
         </span>
-        <button
-          className="loop-expand-all"
-          title="Show every iteration inline"
-          onClick={() => store.loopToggleExpand(g.key)}
-        >
-          ⤢
-        </button>
       </div>
     );
   }
@@ -126,11 +114,15 @@ export function StreamRowSwitch({ row, snap, currentLoopMembers }: RowProps) {
   const span = snap.spans.get(row.spanId);
   if (!span) return null;
   const selected = snap.selectedSpanId === row.spanId;
-  const isCurrentLoopMember = currentLoopMembers.has(row.spanId);
-  const cls =
-    "stream-row" +
-    (selected ? " selected" : "") +
-    (isCurrentLoopMember ? " loop-iteration-current" : "");
+  const track = getFunctionTrackInfo(span, snap);
+
+  let cls = "stream-row" + (selected ? " selected" : "");
+  if (track.isMain) {
+    cls += " row-main-fn";
+    if (track.isDeep) cls += " row-main-deep";
+  } else if (track.isRoot) {
+    cls += " row-root-fn";
+  }
 
   if (row.rowKind === "error") {
     const d = span.errorEvent?.data || {};
@@ -138,6 +130,11 @@ export function StreamRowSwitch({ row, snap, currentLoopMembers }: RowProps) {
       <div className={cls + " row-error"} onClick={() => store.selectSpan(row.spanId)}>
         <TreeGuide depth={row.depth} />
         <div className="row-content">
+          {track.isMain && (
+            <span className="badge badge-target" title="Tracked Main Function (Failed)">
+              🎯 MAIN
+            </span>
+          )}
           <span className="fn-name-label">
             ⚠️ {d.name ? d.name.split(":").pop() : "function"}
           </span>
@@ -191,11 +188,60 @@ export function StreamRowSwitch({ row, snap, currentLoopMembers }: RowProps) {
       resultPreview = `→ ${raw.slice(0, 45)}${raw.length > 45 ? "…" : ""}`;
   }
 
+  const childCount = snap.spanChildCounts.get(span.span_id) || 0;
+  const hasChildren = childCount > 0;
+  const isCollapsed = snap.collapsedSpanIds.has(span.span_id);
+
   return (
     <div className={cls} onClick={() => store.selectSpan(row.spanId)}>
       <TreeGuide depth={row.depth} />
       <div className="row-content">
+        {hasChildren && (
+          <button
+            type="button"
+            className={"span-collapse-btn" + (isCollapsed ? " is-collapsed" : " is-expanded")}
+            title={
+              isCollapsed
+                ? `Click to expand ${childCount} inner nested calls`
+                : `Click to collapse ${childCount} inner nested calls`
+            }
+            onClick={(e) => {
+              e.stopPropagation();
+              store.toggleSpanCollapse(span.span_id);
+            }}
+          >
+            <span className="span-collapse-icon">{isCollapsed ? "▸" : "▾"}</span>
+          </button>
+        )}
+        {track.isMain ? (
+          <span
+            className={track.isDeep ? "badge badge-target-deep" : "badge badge-target"}
+            title={
+              track.isDeep
+                ? "🎯 Instrumented Main Function (Deep Tracing Mode - Captures all sub-calls)"
+                : "🎯 Instrumented Main Function (Top-Level Mode)"
+            }
+          >
+            {track.isDeep ? "⚡ MAIN TARGET" : "🎯 MAIN"}
+          </span>
+        ) : track.isRoot ? (
+          <span className="badge badge-entry-root" title="Trace Entry Point (Root Function)">
+            ↳ ENTRY
+          </span>
+        ) : null}
         <span className="fn-name-label">{shortName(span)}</span>
+        {isCollapsed && hasChildren && (
+          <span
+            className="badge badge-dim inner-collapsed-pill"
+            title={`Click to expand ${childCount} inner deep calls`}
+            onClick={(e) => {
+              e.stopPropagation();
+              store.toggleSpanCollapse(span.span_id);
+            }}
+          >
+            +{childCount} inner {childCount === 1 ? "call" : "calls"}
+          </span>
+        )}
         <span className="fn-args-preview" title={argsSummary}>
           {argsSummary}
         </span>

@@ -1,7 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { store } from "../lib/store";
 import { useTerminal } from "../lib/useTerminal";
-import { formatDuration, formatTimestamp } from "../lib/format";
+import {
+  formatDuration,
+  formatTimestamp,
+  getFunctionTrackInfo,
+} from "../lib/format";
 import { StreamRowSwitch } from "./StreamRows";
 
 interface Props {
@@ -17,14 +21,20 @@ export function StreamPane({ onSendTest }: Props) {
     [s.requests],
   );
 
-  const currentLoopMembers = useMemo(() => {
-    const set = new Set<string>();
-    for (const r of s.requests)
-      for (const row of r.rows)
-        if (row.rowKind === "loop" && !row.group.expanded)
-          set.add(row.group.memberSpanIds[row.group.currentIndex]);
-    return set;
-  }, [s.requests]);
+  const totalMainCalls = useMemo(() => {
+    let count = 0;
+    for (const r of visibleRequests) {
+      for (const row of r.rows) {
+        if (row.rowKind !== "log") {
+          const sp = s.spans.get(row.spanId);
+          if (sp && getFunctionTrackInfo(sp, s).isMain) {
+            count++;
+          }
+        }
+      }
+    }
+    return count;
+  }, [visibleRequests, s]);
 
   const hasContent = visibleRequests.some(
     (r) => r.startEvent || r.rows.length > 0,
@@ -64,6 +74,14 @@ export function StreamPane({ onSendTest }: Props) {
             ● {s.activeRequests} active requests
           </span>
           <span>{s.totalEvents} events</span>
+          {totalMainCalls > 0 && (
+            <span
+              className="stream-header-target-stat"
+              title="Total instrumented main function calls in current trace stream"
+            >
+              🎯 {totalMainCalls} main {totalMainCalls === 1 ? "call" : "calls"}
+            </span>
+          )}
         </div>
         <div>
           <span
@@ -102,10 +120,16 @@ export function StreamPane({ onSendTest }: Props) {
             const summary = r.startEvent?.data?.summary;
             const status = r.endEvent?.data?.status ?? 200;
             const durationMs = r.endEvent?.data?.duration_ms || 0;
+            const hasTarget = r.rows.some((row) => {
+              if (row.rowKind === "log") return false;
+              const sp = s.spans.get(row.spanId);
+              return sp ? getFunctionTrackInfo(sp, s).isMain : false;
+            });
+
             return (
               <div
                 key={r.id}
-                className="stream-group"
+                className={"stream-group" + (hasTarget ? " has-target-fn" : "")}
                 style={{ borderLeftColor: r.color }}
               >
                 {r.startEvent && (
@@ -117,6 +141,14 @@ export function StreamPane({ onSendTest }: Props) {
                       <span className="req-path">{path}</span>
                       {summary && (
                         <span className="req-summary">· {summary}</span>
+                      )}
+                      {hasTarget && (
+                        <span
+                          className="badge badge-target-sm"
+                          title="This request executed a tracked main function"
+                        >
+                          🎯 MAIN ACTIVE
+                        </span>
                       )}
                     </div>
                     <div className="req-start-right">
@@ -140,7 +172,6 @@ export function StreamPane({ onSendTest }: Props) {
                       }
                       row={row}
                       snap={s}
-                      currentLoopMembers={currentLoopMembers}
                     />
                   ))}
                 </div>
