@@ -1,9 +1,6 @@
 """tests/api/test_terminal.py — the Brain Terminal collector
-(backend/api/viewer.py): the ingest endpoint, the register handshake, and
-the dashboard WebSocket's fan-out + per-socket filtering.
-
-The sys.monitoring hosted-app tracer is not involved here — this is the
-push-based path where the target posts its own telemetry.
+(backend/api/viewer.py): scan-based catalogue, the register handshake,
+event fan-out, and the apply-selection / get-value / run-test proxies.
 """
 
 import os
@@ -21,7 +18,6 @@ SAMPLE_PROJECT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "
 
 @pytest.fixture
 def client():
-    # backend.api.viewer.HUB is a module singleton — reset it per test.
     viewer.HUB = viewer.TelemetryHub()
 
     original_cwd = os.getcwd()
@@ -39,112 +35,87 @@ def client():
             del sys.modules[name]
 
 
-def _register(client, base_url="http://127.0.0.1:8000"):
+def _register(client, base_url="http://127.0.0.1:8000", fp="git:abc123def456"):
     return client.post(
         "/viewer/terminal/ingest",
-        json={
-            "kind": "register",
-            "brain_base_url": base_url,
-            "started_at": "2026-09-05T00:00:00+00:00",
-            "catalog": {
-                "groups": [
-                    {"package": "quotation.graph", "functions": [
-                        {"id": "quotation.graph.merge.engine:merge", "name": "merge", "signature": "(a, b)", "doc": ""},
-                    ]},
-                ]
-            },
-        },
+        json={"kind": "register", "brain_base_url": base_url, "started_at": "2026-09-05T00:00:00+00:00", "code_fingerprint": fp},
     )
 
 
 def test_serve_terminal_html(client):
+    # 200 with the built dashboard when `frontend/dist` exists, otherwise a
+    # 404 telling the user to build it — both are valid.
     resp = client.get("/viewer/terminal")
-    assert resp.status_code == 200
+    assert resp.status_code in (200, 404)
     assert "Brain Terminal" in resp.text
 
 
-def test_register_populates_catalog_and_status(client):
+def test_catalogue_comes_from_the_source_scan(client):
+    body = client.get("/viewer/terminal/functions").json()
+    all_fns = [f for g in body["groups"] for f in g["functions"]]
+    ids = {f["id"] for f in all_fns}
+    assert any("calculate_total" in i for i in ids)
+    assert all(":" in i for i in ids)  # module:qualname
+    assert "fingerprint" in body
+
+
+def test_rescan_returns_a_fresh_catalogue(client):
+    body = client.post("/viewer/terminal/rescan").json()
+    assert body["groups"] and any("generate_workflow" in f["id"] for g in body["groups"] for f in g["functions"])
+
+
+def test_register_stores_fingerprint_and_status(client):
     assert _register(client).json()["registered"] is True
-
-    functions = client.get("/viewer/terminal/functions").json()
-    assert functions["groups"][0]["package"] == "quotation.graph"
-
     status = client.get("/viewer/terminal/status").json()
     assert status["brain_base_url"] == "http://127.0.0.1:8000"
+    assert status["brain_fingerprint"] == "git:abc123def456"
     assert status["registers"] == 1
-    assert status["catalog_functions"] == 1
 
 
-def test_functions_falls_back_to_demo_catalogue_before_register(client):
-    body = client.get("/viewer/terminal/functions").json()
-    assert body["groups"] and all("functions" in g for g in body["groups"])
-
-
-def test_ingested_events_broadcast_to_a_connected_dashboard(client):
+def test_apply_selection_without_brain_reports_error(client):
     with client.websocket_connect("/viewer/terminal/ws") as ws:
-        client.post(
-            "/viewer/terminal/ingest",
-            json={"kind": "events", "events": [
-                {"kind": "request.start", "request_id": "req_1", "seq": 1, "data": {"method": "POST", "path": "/x"}},
-                {"kind": "request.end", "request_id": "req_1", "seq": 2, "data": {"status": 200, "duration_ms": 5}},
-            ]},
-        )
-        first = ws.receive_json()
-        second = ws.receive_json()
-
-    assert first["kind"] == "request.start" and first["request_id"] == "req_1"
-    assert second["kind"] == "request.end" and second["data"]["status"] == 200
+        ws.receive_json()  # code_status on connect
+        ws.send_json({"op": "apply_selection", "selections": [{"id": "services.math_service:calculate_total", "deep": False}]})
+        reply = ws.receive_json()
+    assert reply["kind"] == "selection_applied"
+    assert reply.get("error")
+    # remembered for when brain connects
+    assert viewer.HUB.selection == [{"id": "services.math_service:calculate_total", "deep": False}]
 
 
-def test_late_dashboard_gets_the_recent_tail_replayed(client):
+def test_events_broadcast_and_tail_replays(client):
     client.post(
         "/viewer/terminal/ingest",
         json={"kind": "events", "events": [
-            {"kind": "request.start", "request_id": "req_old", "seq": 1, "data": {"method": "GET", "path": "/old"}},
+            {"kind": "request.start", "request_id": "req_1", "seq": 1, "data": {"method": "POST", "path": "/x"}},
         ]},
     )
     with client.websocket_connect("/viewer/terminal/ws") as ws:
+        assert ws.receive_json()["kind"] == "code_status"
         replayed = ws.receive_json()
-    assert replayed["request_id"] == "req_old"
-
-
-def test_selected_only_verbosity_filters_function_events_per_socket(client):
-    with client.websocket_connect("/viewer/terminal/ws") as ws:
-        ws.send_json({"op": "set_verbosity", "level": "selected"})
-        ws.send_json({"op": "select", "functions": ["quotation.graph.merge.engine:merge"]})
+        assert replayed["request_id"] == "req_1"
 
         client.post(
             "/viewer/terminal/ingest",
             json={"kind": "events", "events": [
-                {"kind": "request.start", "request_id": "r", "seq": 1, "data": {"method": "POST", "path": "/p"}},
-                {"kind": "fn.start", "request_id": "r", "span_id": "s1", "seq": 2,
-                 "data": {"name": "quotation.graph.merge.engine:merge", "args": {}}},
-                {"kind": "fn.start", "request_id": "r", "span_id": "s2", "seq": 3,
-                 "data": {"name": "quotation.graph.other:noise", "args": {}}},
-                {"kind": "request.end", "request_id": "r", "seq": 4, "data": {"status": 200, "duration_ms": 1}},
+                {"kind": "fn.start", "request_id": "req_1", "span_id": "s1", "seq": 2, "data": {"name": "m:f", "args": {}}},
             ]},
         )
-
-        got = [ws.receive_json() for _ in range(3)]
-
-    kinds = [(e["kind"], e.get("data", {}).get("name")) for e in got]
-    assert kinds == [
-        ("request.start", None),
-        ("fn.start", "quotation.graph.merge.engine:merge"),
-        ("request.end", None),
-    ]
+        live = ws.receive_json()
+    assert live["kind"] == "fn.start"
 
 
-def test_get_value_without_registered_brain_replies_with_an_error(client):
+def test_get_value_without_brain_replies_error(client):
     with client.websocket_connect("/viewer/terminal/ws") as ws:
+        ws.receive_json()
         ws.send_json({"op": "get_value", "request_id": "r", "span_id": "s", "field": "result"})
         reply = ws.receive_json()
-    assert reply["kind"] == "value"
-    assert "error" in reply["value"]
+    assert reply["kind"] == "value" and "error" in reply["value"]
 
 
-def test_run_test_without_registered_brain_logs_an_error(client):
+def test_run_test_without_brain_logs_error(client):
     with client.websocket_connect("/viewer/terminal/ws") as ws:
+        ws.receive_json()
         ws.send_json({"op": "run_test", "domain": "quotation", "message": "hi"})
         reply = ws.receive_json()
     assert reply["kind"] == "log" and reply["data"]["level"] == "error"

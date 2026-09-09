@@ -1,7 +1,7 @@
 [project]
-name = "python-backend-explorer"
+name = "brain-terminal"
 version = "0.1.0"
-description = "Point at an existing Python backend, browse its functions, and execute them from a web UI without modifying the backend."
+description = "Live trace & function-I/O inspector for a running Python backend: pick functions, watch their arguments, return values, exceptions and nested calls stream in."
 requires-python = ">=3.10"
 dependencies = [
     "fastapi",
@@ -13,4 +13,5 @@ dependencies = [
 dev = ["pytest", "httpx"]
 
 [project.scripts]
-python-explorer = "backend.main:main"
+brain-terminal = "backend.main:main"
+brain-terminal-dev = "backend.dev:main"

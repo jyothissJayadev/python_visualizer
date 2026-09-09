@@ -1,0 +1,184 @@
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { store } from "../lib/store";
+import { useTerminal } from "../lib/useTerminal";
+import { formatDuration, formatTimestamp } from "../lib/format";
+import { StreamRowSwitch } from "./StreamRows";
+
+interface Props {
+  onSendTest: () => void;
+}
+
+export function StreamPane({ onSendTest }: Props) {
+  const s = useTerminal();
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const visibleRequests = useMemo(
+    () => s.requests.filter((r) => r.visible),
+    [s.requests],
+  );
+
+  const currentLoopMembers = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of s.requests)
+      for (const row of r.rows)
+        if (row.rowKind === "loop" && !row.group.expanded)
+          set.add(row.group.memberSpanIds[row.group.currentIndex]);
+    return set;
+  }, [s.requests]);
+
+  const hasContent = visibleRequests.some(
+    (r) => r.startEvent || r.rows.length > 0,
+  );
+
+  // Auto-scroll to bottom on new content.
+  useLayoutEffect(() => {
+    if (s.autoScroll && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [s.version, s.autoScroll]);
+
+  useEffect(() => {
+    const c = scrollRef.current;
+    if (!c) return;
+    const onScroll = () => {
+      const atBottom = c.scrollHeight - c.scrollTop - c.clientHeight < 40;
+      store.setAutoScroll(atBottom);
+    };
+    c.addEventListener("scroll", onScroll);
+    return () => c.removeEventListener("scroll", onScroll);
+  }, []);
+
+  return (
+    <main className="stream-pane">
+      <div className="stream-header-bar">
+        <div className="stream-header-info">
+          <span>LIVE TRACE STREAM</span>
+          <span
+            style={{
+              color:
+                s.activeRequests > 0
+                  ? "var(--accent-amber)"
+                  : "var(--accent-emerald)",
+            }}
+          >
+            ● {s.activeRequests} active requests
+          </span>
+          <span>{s.totalEvents} events</span>
+        </div>
+        <div>
+          <span
+            style={{
+              color: s.autoScroll ? "var(--accent-cyan)" : "var(--accent-amber)",
+              fontSize: 10.5,
+            }}
+          >
+            Auto-scroll: {s.autoScroll ? "ON" : "PAUSED"}
+          </span>
+        </div>
+      </div>
+
+      <div className="stream-scroll-container" ref={scrollRef}>
+        {!hasContent && (
+          <div className="stream-empty-state">
+            <div className="empty-icon">⚡</div>
+            <h3>Waiting for backend traces...</h3>
+            <p>
+              Connected to the FastAPI streaming WebSocket. Make HTTP requests to
+              the backend or trigger a test request to watch execution flow in
+              real-time.
+            </p>
+            <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+              <button className="btn-primary" onClick={onSendTest}>
+                Send Test Request
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div>
+          {visibleRequests.map((r) => {
+            const method = r.startEvent?.data?.method || "POST";
+            const path = r.startEvent?.data?.path || "/";
+            const summary = r.startEvent?.data?.summary;
+            const status = r.endEvent?.data?.status ?? 200;
+            const durationMs = r.endEvent?.data?.duration_ms || 0;
+            return (
+              <div
+                key={r.id}
+                className="stream-group"
+                style={{ borderLeftColor: r.color }}
+              >
+                {r.startEvent && (
+                  <div className="req-start-row">
+                    <div className="req-start-left">
+                      <span className={`req-method method-${method}`}>
+                        {method}
+                      </span>
+                      <span className="req-path">{path}</span>
+                      {summary && (
+                        <span className="req-summary">· {summary}</span>
+                      )}
+                    </div>
+                    <div className="req-start-right">
+                      {!r.endEvent && <span className="spinner-icon" />}
+                      <span style={{ color: "var(--text-muted)" }}>
+                        {formatTimestamp(r.startEvent.ts)}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="req-entries-container">
+                  {r.rows.map((row) => (
+                    <StreamRowSwitch
+                      key={
+                        row.rowKind === "log"
+                          ? row.key
+                          : row.rowKind === "loop"
+                            ? "loop-" + row.key
+                            : row.rowKind + "-" + row.spanId
+                      }
+                      row={row}
+                      snap={s}
+                      currentLoopMembers={currentLoopMembers}
+                    />
+                  ))}
+                </div>
+
+                {r.endEvent && (
+                  <div className="req-end-row">
+                    <span
+                      className={
+                        "badge " + (status >= 400 ? "badge-slow" : "badge-fast")
+                      }
+                    >
+                      {status} OK
+                    </span>
+                    <span className="badge badge-dim">
+                      {formatDuration(durationMs)}
+                    </span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {!s.autoScroll && s.unread > 0 && (
+        <button
+          className="jump-latest-pill"
+          onClick={() => store.catchUp()}
+        >
+          <span>↓ Jump to latest</span>
+          <span
+            className="badge badge-dim"
+            style={{ background: "rgba(0,0,0,0.4)", color: "#fff" }}
+          >
+            {s.unread}
+          </span>
+        </button>
+      )}
+    </main>
+  );
+}

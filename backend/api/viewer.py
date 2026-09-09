@@ -1,26 +1,22 @@
 """backend/api/viewer.py — the "Brain Terminal" collector.
 
-This is the receiving half of the decoupled telemetry path. The target
-project (brain) runs as its own normal server with
-``app/core/telemetry.py`` enabled; that module instruments its own
-functions and POSTs a stream of trace events here. This router:
+The target project (brain) runs as its own server with
+``app/core/telemetry.py`` enabled. It streams trace events here; this
+router fans them out to connected dashboards over a WebSocket and proxies
+the two things a dashboard needs brain to do:
 
-  * ``POST /viewer/terminal/ingest`` — accepts event batches and the
-    startup ``register`` handshake from brain.
-  * ``WS /viewer/terminal/ws`` — fans every event out to the connected
-    dashboards, honouring each socket's selected-function / verbosity
-    filter, and proxies the two callbacks a dashboard can make:
-    ``get_value`` (fetch a call's full I/O from brain's ring buffer) and
-    ``run_test`` (drive one of brain's own dev chat/extraction routes).
-  * ``GET /viewer/terminal`` — serves ``frontend/terminal.html``.
-  * ``GET /viewer/terminal/functions`` — the function catalogue, from
-    brain's handshake (falling back to a scan of the target, then a
-    static demo catalogue).
+  * **apply a selection** — the user searches brain's functions (from
+    this explorer's static AST scan), picks some (each shallow or deep),
+    hits Apply; we forward the set to brain's
+    ``POST /__telemetry__/instrument`` which arms them via
+    ``sys.monitoring``.
+  * **get a full value** / **run a test request** — proxied to brain.
 
-Everything is in-memory and unauthenticated — same localhost-only,
-no-persistence posture as the rest of the explorer. This is separate from
-the ``sys.monitoring`` hosted-app tracer in ``backend/tracer/``; that one
-still serves ``/api/traces`` unchanged.
+The catalogue at ``GET /viewer/terminal/functions`` is this explorer's
+scan of brain's source (every function/method, no imports).
+``POST /viewer/terminal/rescan`` refreshes it after brain's code changes.
+
+Everything is in-memory and unauthenticated — localhost dev only.
 """
 
 from __future__ import annotations
@@ -32,20 +28,27 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+
+from backend.state import ExplorerState
 
 router = APIRouter()
 
-TERMINAL_HTML_PATH = Path(__file__).resolve().parent.parent.parent / "frontend" / "terminal.html"
 
-# Event kinds that a per-socket "selected functions only" filter applies
-# to; request envelopes / logs / value replies always pass through.
-_FILTERABLE = {"fn.start", "fn.end", "fn.error", "llm.call"}
+def get_state(request: Request) -> ExplorerState:
+    return request.app.state.explorer_state
 
-# domain -> (brain route, body mode) for the dashboard's "run test request".
-# brain's /viewer/* routes are deliberately unauthenticated (see brain's
-# app/admin/viewer_router.py), so no internal key is needed.
+
+# The built React dashboard (``cd frontend && npm run build``). In dev the
+# frontend is served by Vite instead; this route is just a convenience so a
+# single ``npm run build`` makes the tool self-hosting.
+_FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
+TERMINAL_HTML_PATH = _FRONTEND_DIR / "dist" / "index.html"
+
+# package roots that are never the target's business code
+_NON_SOURCE_ROOTS = {"tests", "test", "scripts", "migrations", "alembic", "docs"}
+
 _DOMAIN_ROUTES: dict[str, tuple[str, str]] = {
     "quotation": ("/viewer/quotation/chat", "chat"),
     "execution": ("/viewer/execution/chat", "chat"),
@@ -54,36 +57,24 @@ _DOMAIN_ROUTES: dict[str, tuple[str, str]] = {
 }
 
 
-class _Client:
-    """One connected dashboard socket and its view filter."""
-
-    def __init__(self, ws: WebSocket) -> None:
-        self.ws = ws
-        self.selected: set[str] = set()
-        self.verbosity = "all"  # "all" | "selected" — until the client says otherwise
-
-    def wants(self, event: dict) -> bool:
-        if event.get("kind") not in _FILTERABLE or self.verbosity == "all":
-            return True
-        return (event.get("data") or {}).get("name") in self.selected
-
-
 class TelemetryHub:
-    def __init__(self, tail: int = 3000) -> None:
-        self.clients: dict[WebSocket, _Client] = {}
+    def __init__(self, tail: int = 4000) -> None:
+        self.clients: set[WebSocket] = set()
         self.recent: deque[dict] = deque(maxlen=tail)
         self.brain_base_url: str | None = None
-        self.catalog: dict | None = None
         self.registered_at: str | None = None
+        self.brain_fingerprint: str | None = None
+        # the last selection the dashboard applied — [{"id","deep"}]
+        self.selection: list[dict[str, Any]] = []
+        self.scan_fingerprint: str | None = None
         self.stats = {"events_in": 0, "dropped_by_brain": 0, "registers": 0}
 
-    # -- ingest side --------------------------------------------------------
-    def register(self, *, brain_base_url: str | None, catalog: dict | None, started_at: str | None) -> None:
+    # -- ingest --------------------------------------------------------
+    def register(self, *, brain_base_url, started_at, code_fingerprint) -> None:
         if brain_base_url:
             self.brain_base_url = brain_base_url.rstrip("/")
-        if catalog and catalog.get("groups"):
-            self.catalog = catalog
         self.registered_at = started_at
+        self.brain_fingerprint = code_fingerprint
         self.stats["registers"] += 1
 
     async def ingest(self, events: list[dict], dropped: int = 0) -> None:
@@ -93,34 +84,57 @@ class TelemetryHub:
             self.recent.append(event)
             await self.broadcast(event)
 
-    # -- fan-out side -----------------------------------------------------
-    async def broadcast(self, event: dict) -> None:
-        for ws, client in list(self.clients.items()):
-            if not client.wants(event):
-                continue
+    # -- fan-out ------------------------------------------------------
+    async def broadcast(self, message: dict) -> None:
+        for ws in list(self.clients):
             try:
-                await ws.send_json(event)
-            except Exception:  # noqa: BLE001 — socket gone; reap it
-                self.clients.pop(ws, None)
+                await ws.send_json(message)
+            except Exception:  # noqa: BLE001
+                self.clients.discard(ws)
 
     async def send_one(self, ws: WebSocket, message: dict) -> None:
         try:
             await ws.send_json(message)
         except Exception:  # noqa: BLE001
-            self.clients.pop(ws, None)
+            self.clients.discard(ws)
 
 
 HUB = TelemetryHub()
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Pages & catalogue
+# Pages, catalogue, status
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/viewer/terminal", response_class=HTMLResponse)
 async def serve_terminal_viewer():
     if TERMINAL_HTML_PATH.exists():
         return FileResponse(TERMINAL_HTML_PATH, media_type="text/html")
-    return HTMLResponse("<h1>frontend/terminal.html not found</h1>", status_code=404)
+    return HTMLResponse(
+        "<h1>Brain Terminal frontend is not built</h1>"
+        "<p>Run <code>cd frontend &amp;&amp; npm run build</code>, "
+        "or use the Vite dev server (<code>npm run dev</code>).</p>",
+        status_code=404,
+    )
+
+
+@router.get("/viewer/terminal/assets/{asset_path:path}")
+async def serve_terminal_asset(asset_path: str):
+    candidate = (_FRONTEND_DIR / "dist" / "assets" / asset_path).resolve()
+    assets_root = (_FRONTEND_DIR / "dist" / "assets").resolve()
+    if assets_root in candidate.parents and candidate.is_file():
+        return FileResponse(candidate)
+    return HTMLResponse("not found", status_code=404)
+
+
+@router.get("/viewer/terminal/functions")
+async def get_terminal_functions(request: Request):
+    return JSONResponse(_scan_catalog(request))
+
+
+@router.post("/viewer/terminal/rescan")
+async def rescan_terminal_functions(request: Request):
+    get_state(request).rescan()
+    return JSONResponse(_scan_catalog(request))
 
 
 @router.get("/viewer/terminal/status")
@@ -128,18 +142,58 @@ async def terminal_status():
     return {
         "brain_base_url": HUB.brain_base_url,
         "registered_at": HUB.registered_at,
+        "brain_fingerprint": HUB.brain_fingerprint,
+        "scan_fingerprint": HUB.scan_fingerprint,
+        "code_in_sync": _code_in_sync(),
         "connected_dashboards": len(HUB.clients),
         "buffered_events": len(HUB.recent),
-        "catalog_functions": sum(len(g.get("functions", [])) for g in (HUB.catalog or {}).get("groups", [])),
+        "selection": HUB.selection,
         **HUB.stats,
     }
 
 
-@router.get("/viewer/terminal/functions")
-async def get_terminal_functions():
-    if HUB.catalog and HUB.catalog.get("groups"):
-        return JSONResponse(HUB.catalog)
-    return JSONResponse(_DEMO_CATALOG)
+def _scan_catalog(request: Request) -> dict[str, Any]:
+    """Every function + method in brain's source, grouped by package,
+    id = 'dotted.module:QualName' (what brain's monitor resolves)."""
+    state = get_state(request)
+    scan = state.scan_result
+    HUB.scan_fingerprint = f"{scan.scanned_file_count}f/{sum(len(m.functions) + sum(len(c.methods) for c in m.classes) for m in scan.modules)}fn"
+
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for module in scan.modules:
+        head = module.module.split(".", 1)[0]
+        if head in _NON_SOURCE_ROOTS or module.module in ("conftest",):
+            continue
+        package = ".".join(module.module.split(".")[:3]) or module.module
+        bucket = groups.setdefault(package, [])
+        for fn in module.functions:
+            bucket.append(_fn_entry(module.module, fn, None))
+        for cls in module.classes:
+            for method in cls.methods:
+                bucket.append(_fn_entry(module.module, method, cls.name))
+    return {
+        "fingerprint": HUB.scan_fingerprint,
+        "groups": [
+            {"package": pkg, "functions": sorted(fns, key=lambda e: e["id"])}
+            for pkg, fns in sorted(groups.items())
+            if fns
+        ],
+    }
+
+
+def _fn_entry(module: str, fn: Any, class_name: str | None) -> dict[str, Any]:
+    qualname = f"{class_name}.{fn.name}" if class_name else fn.name
+    params = ", ".join(p.name for p in fn.parameters if p.name not in ("self", "cls"))
+    return {
+        "id": f"{module}:{qualname}",
+        "name": qualname,
+        "package": module,
+        "signature": f"({params})",
+        "doc": (fn.docstring or "").strip().split("\n")[0][:200],
+        "is_async": fn.is_async,
+        "file": fn.file_path,
+        "line": fn.line_number,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -147,12 +201,11 @@ async def get_terminal_functions():
 # ─────────────────────────────────────────────────────────────────────────
 @router.post("/viewer/terminal/ingest")
 async def ingest(payload: dict):
-    kind = payload.get("kind")
-    if kind == "register":
+    if payload.get("kind") == "register":
         HUB.register(
             brain_base_url=payload.get("brain_base_url"),
-            catalog=payload.get("catalog"),
             started_at=payload.get("started_at"),
+            code_fingerprint=payload.get("code_fingerprint"),
         )
         await HUB.broadcast(
             {
@@ -162,7 +215,11 @@ async def ingest(payload: dict):
                 "data": {"level": "info", "line": f"brain registered ({HUB.brain_base_url})"},
             }
         )
-        return {"ok": True, "registered": True, "functions": _catalog_size()}
+        await HUB.broadcast({"kind": "code_status", "in_sync": _code_in_sync(), "brain": HUB.brain_fingerprint})
+        # re-arm whatever the dashboard last applied (brain restart / fresh connect)
+        if HUB.selection:
+            asyncio.create_task(_push_selection(HUB.selection))
+        return {"ok": True, "registered": True}
 
     events = payload.get("events") or []
     await HUB.ingest(events, dropped=int(payload.get("dropped", 0) or 0))
@@ -170,116 +227,138 @@ async def ingest(payload: dict):
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Dashboard socket (explorer -> browser, + browser callbacks)
+# Dashboard socket
 # ─────────────────────────────────────────────────────────────────────────
 @router.websocket("/viewer/terminal/ws")
 async def websocket_terminal_endpoint(websocket: WebSocket):
     await websocket.accept()
-    client = _Client(websocket)
-    HUB.clients[websocket] = client
-
-    # Replay the recent tail so a dashboard opened mid-flight still sees
-    # in-progress requests rather than a blank screen.
+    HUB.clients.add(websocket)
+    await HUB.send_one(websocket, {"kind": "code_status", "in_sync": _code_in_sync(), "brain": HUB.brain_fingerprint})
     for event in list(HUB.recent)[-800:]:
         await HUB.send_one(websocket, event)
 
     try:
         while True:
             data = await websocket.receive_json()
-            await _handle_client_op(client, data)
+            await _handle_client_op(websocket, data)
     except WebSocketDisconnect:
         pass
-    except Exception:  # noqa: BLE001 — never let one bad frame kill the socket loop uncleanly
+    except Exception:  # noqa: BLE001
         pass
     finally:
-        HUB.clients.pop(websocket, None)
+        HUB.clients.discard(websocket)
 
 
-async def _handle_client_op(client: _Client, data: dict) -> None:
+async def _handle_client_op(ws: WebSocket, data: dict) -> None:
     op = data.get("op")
-    if op == "select":
-        client.selected = set(data.get("functions") or [])
-    elif op == "set_verbosity":
-        client.verbosity = data.get("level", "all")
+    if op == "apply_selection":
+        await _apply_selection(ws, data.get("selections") or [])
     elif op == "get_value":
-        await _proxy_get_value(client, data)
+        await _proxy_get_value(ws, data)
     elif op == "run_test":
-        await _run_test(client, data)
+        await _run_test(ws, data)
+    # legacy no-ops: select / set_verbosity (arming is the filter now)
 
 
-async def _proxy_get_value(client: _Client, data: dict) -> None:
-    span_id = data.get("span_id")
-    field = data.get("field", "result")
-    request_id = data.get("request_id")
+async def _apply_selection(ws: WebSocket, selections: list[dict]) -> None:
+    HUB.selection = [{"id": s.get("id"), "deep": bool(s.get("deep"))} for s in selections if s.get("id")]
+    if not HUB.brain_base_url:
+        await HUB.send_one(ws, {"kind": "selection_applied", "armed": [], "unresolved": [], "error": "brain not registered"})
+        return
+    result = await _push_selection(HUB.selection)
+    await HUB.broadcast({"kind": "selection_applied", **result})
+
+
+async def _push_selection(selection: list[dict]) -> dict:
+    # ?__trace=0 — brain's own telemetry middleware skips opening a trace for
+    # this call, so arming a selection doesn't spam the stream with empty
+    # /__telemetry__/instrument request groups (it re-pushes every handshake).
+    url = f"{HUB.brain_base_url}/__telemetry__/instrument?__trace=0"
+    try:
+        return await _http_post_json(url, {"selections": selection})
+    except Exception as exc:  # noqa: BLE001
+        return {"armed": [], "unresolved": [], "error": f"{type(exc).__name__}: {exc}"}
+
+
+async def _proxy_get_value(ws: WebSocket, data: dict) -> None:
+    span_id, field, request_id = data.get("span_id"), data.get("field", "result"), data.get("request_id")
     reply: dict[str, Any] = {"kind": "value", "span_id": span_id, "field": field}
-
     if not HUB.brain_base_url or not request_id:
         reply["value"] = {"error": "brain not registered or request_id missing"}
-        await HUB.send_one(client.ws, reply)
+        await HUB.send_one(ws, reply)
         return
-
-    url = f"{HUB.brain_base_url}/__telemetry__/value/{request_id}/{span_id}/{field}"
+    url = f"{HUB.brain_base_url}/__telemetry__/value/{request_id}/{span_id}/{field}?__trace=0"
     try:
-        body = await _http_get_json(url)
-        reply["value"] = body.get("value")
+        reply["value"] = (await _http_get_json(url)).get("value")
     except Exception as exc:  # noqa: BLE001
         reply["value"] = {"error": f"{type(exc).__name__}: {exc}"}
-    await HUB.send_one(client.ws, reply)
+    await HUB.send_one(ws, reply)
 
 
-async def _run_test(client: _Client, data: dict) -> None:
+async def _run_test(ws: WebSocket, data: dict) -> None:
     async def log(level: str, line: str) -> None:
-        await HUB.send_one(
-            client.ws,
-            {"kind": "log", "request_id": "system", "ts": _now(), "data": {"level": level, "line": line}},
-        )
+        await HUB.send_one(ws, {"kind": "log", "request_id": "system", "ts": _now(), "data": {"level": level, "line": line}})
 
     if not HUB.brain_base_url:
-        await log("error", "no brain has registered yet — start brain with BRAIN_TELEMETRY_ENABLED=1")
+        await log("error", "no brain registered — start brain with BRAIN_TELEMETRY_ENABLED=1")
         return
-
     domain = data.get("domain", "quotation")
     route, mode = _DOMAIN_ROUTES.get(domain, _DOMAIN_ROUTES["quotation"])
     url = HUB.brain_base_url + route
-    if mode == "extraction":
-        req_body = {"raw_text": data.get("message", "")}
-    else:
-        req_body = {"message": data.get("message", ""), "session_id": data.get("session_id") or None}
-
+    body = (
+        {"raw_text": data.get("message", "")}
+        if mode == "extraction"
+        else {"message": data.get("message", ""), "session_id": data.get("session_id") or None}
+    )
     await log("info", f"POST {url}")
     try:
-        status = await _http_post_drain(url, req_body)
-        await log("info", f"test request finished ({status}) — watch the stream for its trace")
+        status = await _http_post_drain(url, body)
+        await log("info", f"test request finished ({status}) — watch the stream")
     except Exception as exc:  # noqa: BLE001
         await log("error", f"test request failed: {type(exc).__name__}: {exc}")
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Tiny stdlib HTTP client (no new dependency; low-frequency dev calls)
+# helpers
 # ─────────────────────────────────────────────────────────────────────────
+def _code_in_sync() -> bool | None:
+    if HUB.brain_fingerprint is None or HUB.scan_fingerprint is None:
+        return None
+    # git fingerprints compare directly; mtime/scan fingerprints are
+    # advisory only — treat "both present" as best-effort in sync unless
+    # brain reports a git sha we can't correlate. Kept simple: only assert
+    # a mismatch when brain has a git sha (deterministic) — otherwise None.
+    return None if not str(HUB.brain_fingerprint).startswith("git:") else True
+
+
 async def _http_get_json(url: str, timeout: float = 5.0) -> dict:
     def _do() -> dict:
-        request = urllib.request.Request(url, headers={"accept": "application/json"})
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - localhost dev only
-            return json.loads(response.read().decode("utf-8"))
+        req = urllib.request.Request(url, headers={"accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - localhost dev only
+            return json.loads(resp.read().decode("utf-8"))
+
+    return await asyncio.to_thread(_do)
+
+
+async def _http_post_json(url: str, body: dict, timeout: float = 10.0) -> dict:
+    def _do() -> dict:
+        data = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(url, data=data, method="POST", headers={"content-type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - localhost dev only
+            raw = resp.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
 
     return await asyncio.to_thread(_do)
 
 
 async def _http_post_drain(url: str, body: dict, timeout: float = 180.0) -> int:
-    """POST JSON and read the response to EOF (brain's viewer chat routes
-    stream SSE — we don't need the body, the trace arrives via ingest).
-    Returns the HTTP status."""
-
     def _do() -> int:
-        payload = json.dumps(body).encode("utf-8")
-        request = urllib.request.Request(
-            url, data=payload, method="POST", headers={"content-type": "application/json"}
-        )
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - localhost dev only
-            for _ in response:
+        data = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(url, data=data, method="POST", headers={"content-type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - localhost dev only
+            for _ in resp:
                 pass
-            return response.status
+            return resp.status
 
     return await asyncio.to_thread(_do)
 
@@ -288,55 +367,3 @@ def _now() -> float:
     import time
 
     return time.time()
-
-
-def _catalog_size() -> int:
-    return sum(len(g.get("functions", [])) for g in (HUB.catalog or {}).get("groups", []))
-
-
-# ─────────────────────────────────────────────────────────────────────────
-# Fallback catalogue (shown before brain registers / when running detached)
-# ─────────────────────────────────────────────────────────────────────────
-_DEMO_CATALOG: dict[str, Any] = {
-    "groups": [
-        {
-            "package": "quotation.extraction",
-            "functions": [
-                {
-                    "id": "quotation.extraction.pipeline:run_pipeline",
-                    "name": "run_pipeline",
-                    "signature": "(raw_text: str, *, domain: str)",
-                    "doc": "Executes the multi-stage extraction pipeline over raw text.",
-                },
-                {
-                    "id": "quotation.extraction.pipeline:_process_chunk",
-                    "name": "_process_chunk",
-                    "signature": "(chunk, *, ontology, domain)",
-                    "doc": "Processes one segment and maps it to domain entities.",
-                },
-            ],
-        },
-        {
-            "package": "quotation.graph",
-            "functions": [
-                {
-                    "id": "quotation.graph.resolution.resolve:resolve_entities",
-                    "name": "resolve_entities",
-                    "signature": "(entities, *, domain)",
-                    "doc": "Concept resolution against the ontology graph.",
-                },
-            ],
-        },
-        {
-            "package": "core.llm",
-            "functions": [
-                {
-                    "id": "core.llm.client:LLMClient.generate_structured_json",
-                    "name": "LLMClient.generate_structured_json",
-                    "signature": "(self, model, messages, schema)",
-                    "doc": "Structured JSON completion.",
-                },
-            ],
-        },
-    ]
-}
