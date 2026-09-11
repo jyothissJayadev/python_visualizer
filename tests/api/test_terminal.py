@@ -173,3 +173,37 @@ def test_run_test_without_brain_logs_error(client):
         ws.send_json({"op": "run_test", "domain": "quotation", "message": "hi"})
         reply = ws.receive_json()
     assert reply["kind"] == "log" and reply["data"]["level"] == "error"
+
+
+def test_rest_traces_and_selection(client):
+    # Ingest some sample events
+    client.post(
+        "/viewer/terminal/ingest",
+        json={"kind": "events", "events": [
+            {"kind": "fn.start", "request_id": "req_1", "span_id": "s1", "data": {"name": "services.math:calculate", "fn_id": "services.math:calculate"}},
+            {"kind": "fn.end", "request_id": "req_1", "span_id": "s1", "data": {"name": "services.math:calculate", "fn_id": "services.math:calculate"}},
+            {"kind": "fn.start", "request_id": "req_2", "span_id": "s2", "data": {"name": "utils.text:format", "fn_id": "utils.text:format"}},
+        ]},
+    )
+
+    # Test trace query
+    traces = client.get("/viewer/terminal/traces?limit=10").json()
+    assert len(traces) == 3
+
+    # Test filtered by function_id
+    math_traces = client.get("/viewer/terminal/traces?function_id=calculate").json()
+    assert len(math_traces) == 2
+
+    # Test filtered by request_id
+    req2_traces = client.get("/viewer/terminal/traces?request_id=req_2").json()
+    assert len(req2_traces) == 1
+
+    # Test REST selection without brain
+    sel_res = client.post("/viewer/terminal/selection", json={"selections": [{"id": "services.math:calculate", "deep": True}]}).json()
+    assert sel_res["ok"] is False
+    assert viewer.HUB.selection == [{"id": "services.math:calculate", "deep": True}]
+
+    # Test REST test trigger without brain
+    test_res = client.post("/viewer/terminal/test", json={"message": "hello"}).json()
+    assert test_res["ok"] is False
+

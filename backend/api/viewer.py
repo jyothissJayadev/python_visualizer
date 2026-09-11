@@ -153,6 +153,76 @@ async def terminal_status():
     }
 
 
+@router.get("/viewer/terminal/traces")
+async def get_terminal_traces(
+    limit: int = 50,
+    function_id: str | None = None,
+    request_id: str | None = None,
+    kind: str | None = None,
+):
+    """Query recent telemetry events with optional filtering."""
+    limit = max(1, min(limit, 500))
+    events = list(HUB.recent)
+    if request_id:
+        events = [e for e in events if e.get("request_id") == request_id]
+    if kind:
+        events = [e for e in events if e.get("kind") == kind]
+    if function_id:
+        fid_lower = function_id.lower()
+        events = [
+            e
+            for e in events
+            if fid_lower in str(e.get("data", {}).get("fn_id", "")).lower()
+            or fid_lower in str(e.get("data", {}).get("name", "")).lower()
+        ]
+    return JSONResponse(events[-limit:])
+
+
+@router.post("/viewer/terminal/selection")
+async def set_terminal_selection(payload: dict):
+    """Set active function selections and push them to brain."""
+    selections = payload.get("selections") or []
+    HUB.selection = [{"id": s.get("id"), "deep": bool(s.get("deep"))} for s in selections if s.get("id")]
+    if not HUB.brain_base_url:
+        return JSONResponse({"ok": False, "armed": [], "unresolved": [], "error": "brain not registered"})
+    result = await _push_selection(HUB.selection)
+    await HUB.broadcast({"kind": "selection_applied", **result})
+    return JSONResponse({"ok": True, **result})
+
+
+@router.get("/viewer/terminal/value/{request_id}/{span_id}/{field}")
+async def get_terminal_span_value(request_id: str, span_id: str, field: str):
+    """Fetch full value (input, result, or exc) for a specific span from brain."""
+    if not HUB.brain_base_url:
+        return JSONResponse({"error": "brain not registered"}, status_code=503)
+    url = f"{HUB.brain_base_url}/__telemetry__/value/{request_id}/{span_id}/{field}?__trace=0"
+    try:
+        data = await _http_get_json(url)
+        return JSONResponse({"span_id": span_id, "field": field, "value": data.get("value")})
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+
+
+@router.post("/viewer/terminal/test")
+async def run_terminal_test(payload: dict):
+    """Trigger a test request to brain."""
+    if not HUB.brain_base_url:
+        return JSONResponse({"ok": False, "error": "no brain registered"}, status_code=503)
+    domain = payload.get("domain", "quotation")
+    route, mode = _DOMAIN_ROUTES.get(domain, _DOMAIN_ROUTES["quotation"])
+    url = HUB.brain_base_url + route
+    body = (
+        {"raw_text": payload.get("message", "")}
+        if mode == "extraction"
+        else {"message": payload.get("message", ""), "session_id": payload.get("session_id") or None}
+    )
+    try:
+        status = await _http_post_drain(url, body)
+        return JSONResponse({"ok": True, "status": status})
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+
+
 def _scan_catalog(request: Request) -> dict[str, Any]:
     """Every function + method in brain's source, grouped by package,
     id = 'dotted.module:QualName' (what brain's monitor resolves)."""

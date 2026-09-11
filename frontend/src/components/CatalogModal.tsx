@@ -121,10 +121,7 @@ export function CatalogModal({ open, onClose }: Props) {
           </div>
         </div>
 
-        <div
-          className="catalog-tree-container"
-          style={{ flex: 1, maxHeight: "none", padding: "12px 14px", background: "var(--bg-root)" }}
-        >
+        <div className="catalog-modal-scroll-area">
           {groups.length === 0 ? (
             <div className="selected-empty" style={{ margin: "20px auto", maxWidth: 460 }}>
               {search ? (

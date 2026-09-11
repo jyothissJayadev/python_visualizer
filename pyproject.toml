@@ -7,11 +7,14 @@ dependencies = [
     "fastapi",
     "uvicorn[standard]",
     "pydantic>=2",
+    "mcp>=1.0.0",
+    "httpx>=0.27.0",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "httpx"]
+dev = ["pytest", "pytest-asyncio", "httpx"]
 
 [project.scripts]
 brain-terminal = "backend.main:main"
 brain-terminal-dev = "backend.dev:main"
+brain-terminal-mcp = "backend.mcp_server:main"

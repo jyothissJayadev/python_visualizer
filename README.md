@@ -49,8 +49,8 @@ npm install
 python -m backend.dev --project D:\code\main\atomics_system\apps\brain
 ```
 
-- backend  → http://127.0.0.1:8011
-- frontend → http://localhost:5177  (Vite dev server; proxies `/viewer/*`,
+- backend → http://127.0.0.1:8011
+- frontend → http://localhost:5177 (Vite dev server; proxies `/viewer/*`,
   HTTP + WebSocket, to the backend)
 
 Ctrl+C stops both; if either exits, the other is shut down too. Flags:
@@ -74,13 +74,13 @@ python -m uvicorn app.main:app --port 8000
 
 ```cmd
 :: cmd.exe — the quotes keep trailing spaces out of the value
-set "BRAIN_TELEMETRY_ENABLED=1"
-set "BRAIN_TELEMETRY_SINK_URL=http://127.0.0.1:8011"
-set "BRAIN_TELEMETRY_SELF_URL=http://127.0.0.1:8000"
-python -m uvicorn app.main:app --port 8000
+  set "BRAIN_TELEMETRY_ENABLED=1"
+  set "BRAIN_TELEMETRY_SINK_URL=http://127.0.0.1:8011"
+  set "BRAIN_TELEMETRY_SELF_URL=http://127.0.0.1:8000"
+  python -m uvicorn app.main:app --port 8000 --reload
 ```
 
-Or put those three in `atomics_system/apps/brain/.env` (there `#` *is* a
+Or put those three in `atomics_system/apps/brain/.env` (there `#` _is_ a
 comment) and launch brain from a shell where they aren't already set —
 `load_dotenv()` does not override an existing shell variable.
 
