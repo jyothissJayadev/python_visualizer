@@ -13,7 +13,7 @@ import os
 
 import uvicorn
 
-from backend.config import DEFAULT_IGNORED_DIRECTORIES, ExplorerConfig
+from backend.config import DEFAULT_IGNORED_DIRECTORIES, ExplorerConfig, project_path_problem
 
 
 def parse_args(argv: list[str] | None = None) -> ExplorerConfig:
@@ -29,6 +29,9 @@ def parse_args(argv: list[str] | None = None) -> ExplorerConfig:
         help="Additional directory name to ignore while scanning (repeatable)",
     )
     args = parser.parse_args(argv)
+    problem = project_path_problem(os.path.abspath(args.project))
+    if problem:
+        parser.error(problem)
 
     ignored = frozenset(DEFAULT_IGNORED_DIRECTORIES | set(args.ignore))
     return ExplorerConfig(

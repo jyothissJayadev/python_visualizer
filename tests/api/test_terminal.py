@@ -24,7 +24,9 @@ def client():
     original_path = list(sys.path)
     modules_before = set(sys.modules)
 
-    app = create_app(ExplorerConfig(project_path=SAMPLE_PROJECT))
+    # analysis off: its analysis_* broadcasts would interleave with the
+    # collector messages these tests assert on (see test_routes_api.py)
+    app = create_app(ExplorerConfig(project_path=SAMPLE_PROJECT), analyze_on_start=False)
     with TestClient(app) as test_client:
         yield test_client
 
@@ -167,14 +169,6 @@ def test_get_value_without_brain_replies_error(client):
     assert reply["kind"] == "value" and "error" in reply["value"]
 
 
-def test_run_test_without_brain_logs_error(client):
-    with client.websocket_connect("/viewer/terminal/ws") as ws:
-        ws.receive_json()
-        ws.send_json({"op": "run_test", "domain": "quotation", "message": "hi"})
-        reply = ws.receive_json()
-    assert reply["kind"] == "log" and reply["data"]["level"] == "error"
-
-
 def test_rest_traces_and_selection(client):
     # Ingest some sample events
     client.post(
@@ -202,8 +196,4 @@ def test_rest_traces_and_selection(client):
     sel_res = client.post("/viewer/terminal/selection", json={"selections": [{"id": "services.math:calculate", "deep": True}]}).json()
     assert sel_res["ok"] is False
     assert viewer.HUB.selection == [{"id": "services.math:calculate", "deep": True}]
-
-    # Test REST test trigger without brain
-    test_res = client.post("/viewer/terminal/test", json={"message": "hello"}).json()
-    assert test_res["ok"] is False
 

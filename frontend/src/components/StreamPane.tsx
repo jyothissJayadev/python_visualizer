@@ -8,11 +8,7 @@ import {
 } from "../lib/format";
 import { StreamRowSwitch } from "./StreamRows";
 
-interface Props {
-  onSendTest: () => void;
-}
-
-export function StreamPane({ onSendTest }: Props) {
+export function StreamPane() {
   const s = useTerminal();
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -102,14 +98,8 @@ export function StreamPane({ onSendTest }: Props) {
             <h3>Waiting for backend traces...</h3>
             <p>
               Connected to the FastAPI streaming WebSocket. Make HTTP requests to
-              the backend or trigger a test request to watch execution flow in
-              real-time.
+              the backend to watch execution flow in real-time.
             </p>
-            <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-              <button className="btn-primary" onClick={onSendTest}>
-                Send Test Request
-              </button>
-            </div>
           </div>
         )}
 

@@ -15,7 +15,6 @@ When writing, debugging, or modifying code in this codebase or the target backen
 | `arm_functions(function_ids, deep)` | Dynamically arm/instrument target functions (`module.path:QualName`) using PEP 669 `sys.monitoring` in the running backend. Set `deep=True` to trace child calls inside the function. |
 | `get_recent_traces(limit, function_id, request_id)` | Query recent execution events, call hierarchy, timestamps, execution durations, and errors. |
 | `get_function_io(request_id, span_id, field)` | Retrieve full, untruncated runtime `input` arguments, return `result`, or `exc` exception stack traces for a specific function span. |
-| `run_test_request(message, domain)` | Send a test HTTP request to the running backend to trigger function execution and record fresh telemetry. |
 | `get_status()` | Check if the backend ("brain") is connected and registered, and view active armed selections. |
 
 ---
@@ -25,7 +24,7 @@ When writing, debugging, or modifying code in this codebase or the target backen
 ### 1. When Fixing a Bug
 1. Call `list_functions(query="<name>")` to find the exact target function ID (e.g. `app.services.quote:calculate_quote`).
 2. Call `arm_functions(["app.services.quote:calculate_quote"], deep=True)` to enable tracing.
-3. Trigger the failing flow (or run `run_test_request(...)`).
+3. Trigger the failing flow.
 4. Call `get_recent_traces(function_id="calculate_quote")` to inspect the failure.
 5. Call `get_function_io(request_id=..., span_id=..., field="exc")` and `field="input"` to examine the exact arguments and exception.
 6. Make the code fix with exact knowledge of the runtime payload.
@@ -33,7 +32,7 @@ When writing, debugging, or modifying code in this codebase or the target backen
 ### 2. When Refactoring or Adding Features
 1. Before changing existing functions, check their actual input/output shapes via `get_recent_traces` and `get_function_io`.
 2. Apply your changes.
-3. Arm the functions and trigger a test request with `run_test_request` to verify that return values and types remain compliant.
+3. Arm the functions and send a request to verify that return values and types remain compliant.
 
 ---
 

@@ -148,26 +148,6 @@ async def get_function_io(request_id: str, span_id: str, field: str = "result") 
         return {"error": f"Failed to get span value: {exc}"}
 
 
-@mcp.tool()
-async def run_test_request(
-    message: str = "",
-    domain: str = "quotation",
-    session_id: str = "",
-) -> dict[str, Any]:
-    """Trigger a test HTTP request to the running backend to execute code and generate traces.
-
-    Args:
-        message: Input message or prompt to send.
-        domain: Domain endpoint to target ('quotation', 'execution', 'quotation_edit', or 'extraction').
-        session_id: Optional session identifier.
-    """
-    try:
-        payload = {"message": message, "domain": domain, "session_id": session_id}
-        return await _fetch_post("/viewer/terminal/test", payload)
-    except Exception as exc:  # noqa: BLE001
-        return {"error": f"Failed to run test request: {exc}"}
-
-
 def main():
     mcp.run(transport="stdio")
 

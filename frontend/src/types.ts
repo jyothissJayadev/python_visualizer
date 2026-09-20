@@ -107,16 +107,10 @@ export interface GetValueOp {
   span_id: string;
   field: "args" | "result";
 }
-export interface RunTestOp {
-  op: "run_test";
-  domain: string;
-  message: string;
-  session_id: string | null;
-}
 export interface ClearOp {
   op: "clear";
 }
-export type ClientOp = ApplySelectionOp | GetValueOp | RunTestOp | ClearOp;
+export type ClientOp = ApplySelectionOp | GetValueOp | ClearOp;
 
 /* ---- function catalogue ---- */
 
@@ -168,8 +162,6 @@ export type ConnectionStatus =
   | "connected"
   | "reconnecting"
   | "down";
-
-export type Verbosity = "selected" | "all";
 
 export interface LoopGroup {
   key: string;

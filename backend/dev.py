@@ -1,6 +1,6 @@
 """backend/dev.py — run the backend and the Vite frontend together.
 
-    python -m backend.dev --project D:\\code\\main\\atomics_system\\apps\\brain
+    python -m backend.dev --project /path/to/atomics_estimate_engine/apps/brain
 
 Backend  -> http://127.0.0.1:8011
 Frontend -> http://127.0.0.1:5177   (Vite dev server; proxies /viewer/* to
@@ -17,6 +17,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+from backend.config import project_path_problem
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = ROOT / "frontend"
@@ -38,6 +40,9 @@ def main(argv: list[str] | None = None) -> int:
         help="Extra directory name to skip while scanning (repeatable)",
     )
     args = parser.parse_args(argv)
+    problem = project_path_problem(os.path.abspath(args.project))
+    if problem:
+        parser.error(problem)
 
     if not (FRONTEND_DIR / "node_modules").is_dir():
         print("frontend/node_modules missing — run `cd frontend && npm install` first.", file=sys.stderr)

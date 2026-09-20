@@ -19,7 +19,6 @@ import type {
   SpanData,
   TraceEvent,
   ValueMessage,
-  Verbosity,
 } from "../types";
 
 const LOOP_COLLAPSE_THRESHOLD = 10;
@@ -68,7 +67,6 @@ export interface Snapshot {
   catalogSearchQuery: string;
   collapsedPackages: Set<string>;
 
-  verbosity: Verbosity;
   loopFold: boolean;
   selectedOnly: boolean;
   paused: boolean;
@@ -125,7 +123,6 @@ export class TerminalStore {
   private catalogSearchQuery = "";
   private collapsedPackages = new Set<string>(); // holds "OPEN:<pkg>" once expanded
 
-  private verbosity: Verbosity = "all";
   private loopFold = true;
   private selectedOnly = true;
   private paused = false;
@@ -420,16 +417,6 @@ export class TerminalStore {
 
   /* ---------------------------------------------------------------- stream ctl */
 
-  setVerbosity(level: Verbosity) {
-    this.verbosity = level;
-    this.pushToast(
-      level === "selected"
-        ? "Showing only the exact functions you armed"
-        : "Showing armed functions + every nested call under them",
-    );
-    this.emitNow();
-  }
-
   toggleLoopFold() {
     this.loopFold = !this.loopFold;
     this.pushToast(
@@ -577,13 +564,6 @@ export class TerminalStore {
     this.emitNow();
   }
 
-  /* ---------------------------------------------------------------- test req */
-
-  runTest(domain: string, message: string, sessionId: string | null) {
-    this.send({ op: "run_test", domain, message, session_id: sessionId });
-    this.pushToast(`Triggered test request in ${domain}`);
-  }
-
   loadFullValue(span: SpanData, field: "args" | "result") {
     this.send({
       op: "get_value",
@@ -610,14 +590,6 @@ export class TerminalStore {
   /* ---------------------------------------------------------------- derive */
 
   private eventFilterMatch(ev: TraceEvent): boolean {
-    if (
-      this.verbosity === "selected" &&
-      (ev.kind === "fn.start" || ev.kind === "fn.end" || ev.kind === "fn.error")
-    ) {
-      const name = ev.data?.name;
-      if (name && this.appliedSelection.size > 0 && !this.appliedSelection.has(name))
-        return false;
-    }
     if (
       ev.kind === "log" &&
       this.selectedOnly &&
@@ -894,7 +866,6 @@ export class TerminalStore {
       selectionDirty: cur !== applied,
       catalogSearchQuery: this.catalogSearchQuery,
       collapsedPackages: new Set(this.collapsedPackages),
-      verbosity: this.verbosity,
       loopFold: this.loopFold,
       selectedOnly: this.selectedOnly,
       paused: this.paused,

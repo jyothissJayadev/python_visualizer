@@ -5,7 +5,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
+from backend.analysis.service import CACHE_DIR, AnalysisService
+from backend.api import viewer
+from backend.api.routes import router as routes_router
 from backend.api.viewer import router as viewer_router
 from backend.config import DEFAULT_IGNORED_DIRECTORIES, ExplorerConfig
 from backend.state import ExplorerState
@@ -16,13 +20,25 @@ from backend.state import ExplorerState
 _DEV_FRONTEND_ORIGIN_REGEX = r"^https?://(localhost|127\.0\.0\.1):\d+$"
 
 
-def create_app(config: ExplorerConfig) -> FastAPI:
+def create_app(
+    config: ExplorerConfig, *, watch: bool = True, cache_dir=CACHE_DIR, analyze_on_start: bool = True
+) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.explorer_state = ExplorerState(config)
-        yield
+        # viewer.HUB is looked up per call: tests replace it
+        service = AnalysisService(config, broadcast=lambda msg: viewer.HUB.broadcast(msg), cache_dir=cache_dir)
+        app.state.analysis_service = service
+        if analyze_on_start:
+            await service.start(watch=watch)
+        try:
+            yield
+        finally:
+            await service.stop()
 
     app = FastAPI(title="Brain Terminal", lifespan=lifespan)
+    # tree payloads are repetitive JSON (~10x smaller compressed)
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=_DEV_FRONTEND_ORIGIN_REGEX,
@@ -30,6 +46,7 @@ def create_app(config: ExplorerConfig) -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(viewer_router)
+    app.include_router(routes_router)
     return app
 
 

@@ -46,7 +46,10 @@ npm install
 **One command — backend + frontend together:**
 
 ```bash
-python -m backend.dev --project D:\code\main\atomics_system\apps\brain
+
+python -m backend.dev \
+  --project /run/media/jyothiss/main/code/atomics_estimate_engine/apps/brain
+
 ```
 
 - backend → http://127.0.0.1:8011
@@ -58,9 +61,9 @@ Ctrl+C stops both; if either exits, the other is shut down too. Flags:
 (repeatable). Installed as the `brain-terminal-dev` console script too.
 
 **Brain side** (behind a flag — see
-`atomics_system/apps/brain/app/core/telemetry.py`). `BRAIN_TELEMETRY_SINK_URL`
-is this tool's backend; `BRAIN_TELEMETRY_SELF_URL` is brain's own base URL
-(used by the "run test" button). Set the URLs bare — **no trailing comment
+`atomics_estimate_engine/apps/brain/app/core/telemetry.py`). `BRAIN_TELEMETRY_SINK_URL`
+is this tool's backend; `BRAIN_TELEMETRY_SELF_URL` is brain's own base URL.
+Set the URLs bare — **no trailing comment
 or spaces**; `set FOO=url  # note` in cmd stores the note as part of the
 value and the events silently 404.
 
@@ -80,7 +83,7 @@ python -m uvicorn app.main:app --port 8000
   python -m uvicorn app.main:app --port 8000 --reload
 ```
 
-Or put those three in `atomics_system/apps/brain/.env` (there `#` _is_ a
+Or put those three in `atomics_estimate_engine/apps/brain/.env` (there `#` _is_ a
 comment) and launch brain from a shell where they aren't already set —
 `load_dotenv()` does not override an existing shell variable.
 

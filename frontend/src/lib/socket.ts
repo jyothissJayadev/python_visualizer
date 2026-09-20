@@ -3,6 +3,8 @@
    and pipes messages into the store. */
 
 import { store } from "./store";
+import { routesStore } from "./routesStore";
+import { databaseStore } from "./databaseStore";
 import type { ClientOp, IncomingMessage } from "../types";
 
 function wsUrl(): string {
@@ -67,7 +69,13 @@ function connect() {
   socket.onmessage = (evt) => {
     try {
       const msg = JSON.parse(evt.data) as IncomingMessage;
-      store.handleMessage(msg);
+      if (typeof msg.kind === "string" && msg.kind.startsWith("analysis_")) {
+        routesStore.onAnalysisMessage(msg as unknown as Parameters<typeof routesStore.onAnalysisMessage>[0]);
+        if (msg.kind === "analysis_updated") void databaseStore.loadCode(); // the code changed: re-derive the links
+      } else {
+        store.handleMessage(msg);
+        if (msg.kind === "request.end" || msg.kind === "selection_applied") routesStore.onTraceActivity();
+      }
     } catch (err) {
       console.error("Failed to parse WS JSON:", err, evt.data);
     }

@@ -8,3 +8,6 @@ node_modules/
 frontend/dist/
 
 *.log
+
+# analysis cache (backend/analysis/service.py)
+.cache/

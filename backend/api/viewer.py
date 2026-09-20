@@ -49,13 +49,6 @@ TERMINAL_HTML_PATH = _FRONTEND_DIR / "dist" / "index.html"
 # package roots that are never the target's business code
 _NON_SOURCE_ROOTS = {"tests", "test", "scripts", "migrations", "alembic", "docs"}
 
-_DOMAIN_ROUTES: dict[str, tuple[str, str]] = {
-    "quotation": ("/viewer/quotation/chat", "chat"),
-    "execution": ("/viewer/execution/chat", "chat"),
-    "quotation_edit": ("/viewer/quotation_edit/chat", "chat"),
-    "extraction": ("/viewer/extraction/run", "extraction"),
-}
-
 
 class TelemetryHub:
     def __init__(self, tail: int = 4000) -> None:
@@ -203,24 +196,6 @@ async def get_terminal_span_value(request_id: str, span_id: str, field: str):
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
 
-@router.post("/viewer/terminal/test")
-async def run_terminal_test(payload: dict):
-    """Trigger a test request to brain."""
-    if not HUB.brain_base_url:
-        return JSONResponse({"ok": False, "error": "no brain registered"}, status_code=503)
-    domain = payload.get("domain", "quotation")
-    route, mode = _DOMAIN_ROUTES.get(domain, _DOMAIN_ROUTES["quotation"])
-    url = HUB.brain_base_url + route
-    body = (
-        {"raw_text": payload.get("message", "")}
-        if mode == "extraction"
-        else {"message": payload.get("message", ""), "session_id": payload.get("session_id") or None}
-    )
-    try:
-        status = await _http_post_drain(url, body)
-        return JSONResponse({"ok": True, "status": status})
-    except Exception as exc:  # noqa: BLE001
-        return JSONResponse({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
 
 def _scan_catalog(request: Request) -> dict[str, Any]:
@@ -331,11 +306,8 @@ async def _handle_client_op(ws: WebSocket, data: dict) -> None:
         await _apply_selection(ws, data.get("selections") or [])
     elif op == "get_value":
         await _proxy_get_value(ws, data)
-    elif op == "run_test":
-        await _run_test(ws, data)
     elif op == "clear":
         await _clear_buffer()
-    # legacy no-ops: select / set_verbosity (arming is the filter now)
 
 
 async def _clear_buffer() -> None:
@@ -381,29 +353,6 @@ async def _proxy_get_value(ws: WebSocket, data: dict) -> None:
     await HUB.send_one(ws, reply)
 
 
-async def _run_test(ws: WebSocket, data: dict) -> None:
-    async def log(level: str, line: str) -> None:
-        await HUB.send_one(ws, {"kind": "log", "request_id": "system", "ts": _now(), "data": {"level": level, "line": line}})
-
-    if not HUB.brain_base_url:
-        await log("error", "no brain registered — start brain with BRAIN_TELEMETRY_ENABLED=1")
-        return
-    domain = data.get("domain", "quotation")
-    route, mode = _DOMAIN_ROUTES.get(domain, _DOMAIN_ROUTES["quotation"])
-    url = HUB.brain_base_url + route
-    body = (
-        {"raw_text": data.get("message", "")}
-        if mode == "extraction"
-        else {"message": data.get("message", ""), "session_id": data.get("session_id") or None}
-    )
-    await log("info", f"POST {url}")
-    try:
-        status = await _http_post_drain(url, body)
-        await log("info", f"test request finished ({status}) — watch the stream")
-    except Exception as exc:  # noqa: BLE001
-        await log("error", f"test request failed: {type(exc).__name__}: {exc}")
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # helpers
 # ─────────────────────────────────────────────────────────────────────────
@@ -433,18 +382,6 @@ async def _http_post_json(url: str, body: dict, timeout: float = 10.0) -> dict:
         with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - localhost dev only
             raw = resp.read().decode("utf-8")
             return json.loads(raw) if raw else {}
-
-    return await asyncio.to_thread(_do)
-
-
-async def _http_post_drain(url: str, body: dict, timeout: float = 180.0) -> int:
-    def _do() -> int:
-        data = json.dumps(body).encode("utf-8")
-        req = urllib.request.Request(url, data=data, method="POST", headers={"content-type": "application/json"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - localhost dev only
-            for _ in resp:
-                pass
-            return resp.status
 
     return await asyncio.to_thread(_do)
 

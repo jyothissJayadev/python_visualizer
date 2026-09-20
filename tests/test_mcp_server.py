@@ -8,7 +8,6 @@ from backend.mcp_server import (
     arm_functions,
     get_recent_traces,
     get_function_io,
-    run_test_request,
 )
 
 
@@ -87,13 +86,4 @@ async def test_mcp_get_function_io():
         mock_get.assert_called_once_with("/viewer/terminal/value/req_1/s1/result")
 
 
-@pytest.mark.asyncio
-async def test_mcp_run_test_request():
-    with patch("backend.mcp_server._fetch_post", new_callable=AsyncMock) as mock_post:
-        mock_post.return_value = {"ok": True, "status": 200}
-        res = await run_test_request(message="test hello", domain="quotation")
-        assert res["ok"] is True
-        mock_post.assert_called_once_with(
-            "/viewer/terminal/test",
-            {"message": "test hello", "domain": "quotation", "session_id": ""},
-        )
+

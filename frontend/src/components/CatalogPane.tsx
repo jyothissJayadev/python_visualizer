@@ -1,32 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
 import { store } from "../lib/store";
 import { useTerminal } from "../lib/useTerminal";
-
-const DOMAINS = ["quotation", "execution", "quotation_edit", "extraction"];
 
 interface Props {
   collapsed: boolean;
   onOpenModal: () => void;
-  testDrawerOpen: boolean;
-  setTestDrawerOpen: (v: boolean) => void;
 }
 
 export function CatalogPane({
   collapsed,
   onOpenModal,
-  testDrawerOpen,
-  setTestDrawerOpen,
 }: Props) {
   const s = useTerminal();
-  const messageRef = useRef<HTMLTextAreaElement>(null);
-
-  const [domain, setDomain] = useState("quotation");
-  const [sessionId, setSessionId] = useState("");
-  const [message, setMessage] = useState("");
-
-  useEffect(() => {
-    if (testDrawerOpen) messageRef.current?.focus();
-  }, [testDrawerOpen]);
 
   const deepCount = useMemo(
     () =>
@@ -103,61 +88,7 @@ export function CatalogPane({
         </button>
       </div>
 
-      <div className="test-request-section">
-        <button
-          className="test-request-toggle"
-          onClick={() => setTestDrawerOpen(!testDrawerOpen)}
-        >
-          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span>⚡</span>
-            <span>Send Test Request</span>
-          </span>
-          <span style={{ fontSize: 10 }}>{testDrawerOpen ? "▲" : "▼"}</span>
-        </button>
-        <div className={"test-request-body" + (testDrawerOpen ? "" : " hidden")}>
-          <div className="form-group">
-            <label>Domain Target</label>
-            <select value={domain} onChange={(e) => setDomain(e.target.value)}>
-              {DOMAINS.map((d) => (
-                <option key={d} value={d}>
-                  {d}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="form-group">
-            <label>Session ID (optional)</label>
-            <input
-              type="text"
-              placeholder="e.g. sess_live_123"
-              value={sessionId}
-              onChange={(e) => setSessionId(e.target.value)}
-            />
-          </div>
-          <div className="form-group">
-            <label>Message / Prompt Payload</label>
-            <textarea
-              ref={messageRef}
-              placeholder="Enter test prompt or input payload..."
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-            />
-          </div>
-          <button
-            className="btn-primary"
-            style={{ marginTop: 4, justifyContent: "center" }}
-            onClick={() =>
-              store.runTest(
-                domain,
-                message.trim() || "Process sample quotation payload",
-                sessionId.trim() || null,
-              )
-            }
-          >
-            🚀 Execute Test Pipeline
-          </button>
-        </div>
-      </div>
+
 
       {s.codeInSync === false && (
         <div className="code-sync-banner">

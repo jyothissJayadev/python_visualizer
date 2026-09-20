@@ -7,6 +7,7 @@ at a project and control how its source is scanned.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 DEFAULT_IGNORED_DIRECTORIES: frozenset[str] = frozenset(
@@ -22,6 +23,14 @@ DEFAULT_IGNORED_DIRECTORIES: frozenset[str] = frozenset(
         ".ruff_cache",
     }
 )
+
+
+def project_path_problem(path: str) -> str | None:
+    """Why `path` cannot be analysed as a project root, or None if it can."""
+    if not os.path.isdir(path):
+        hint = " (that is the README's placeholder — pass the real path to brain)" if "/path/to/" in path else ""
+        return f"project path does not exist or is not a directory: {path}{hint}"
+    return None
 
 
 @dataclass(frozen=True)
