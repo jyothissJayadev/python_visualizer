@@ -68,13 +68,13 @@ export function displayTable(usage: TableUsage): DatabaseTable {
 }
 
 /** Documented relationships between two tables that are both in `ids`. */
-export function relationsAmong(ids: Set<string>): DatabaseRelationship[] {
-  return BRAIN_DATABASE_SCHEMA.relationships.filter((r) => ids.has(r.fromTableId) && ids.has(r.toTableId));
+export function relationsAmong(ids: Set<string>, all: DatabaseRelationship[]): DatabaseRelationship[] {
+  return all.filter((r) => ids.has(r.fromTableId) && ids.has(r.toTableId));
 }
 
 /** Every documented relationship that touches `id`. */
-export function relationsOf(id: string): DatabaseRelationship[] {
-  return BRAIN_DATABASE_SCHEMA.relationships.filter((r) => r.fromTableId === id || r.toTableId === id);
+export function relationsOf(id: string, all: DatabaseRelationship[]): DatabaseRelationship[] {
+  return all.filter((r) => r.fromTableId === id || r.toTableId === id);
 }
 
 export function openInDatabaseView(id: string) {

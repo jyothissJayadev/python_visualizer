@@ -125,6 +125,16 @@ export function EndpointHeader() {
           )}
           <span className="rt-spacer" />
           {rt && !rt.brain_connected && <span className="rt-mini warn" title="Brain has not registered with the collector yet">brain not connected</span>}
+          {s.brainCode?.state === "older" && (
+            <span
+              className="rt-mini warn"
+              title={`${s.brainCode.newer_files} source file(s) changed after brain started` +
+                (s.brainCode.newest_file ? `, most recently ${s.brainCode.newest_file}` : "") +
+                ". The hierarchy shows the code on disk; live traces come from the older running code. Restart brain (or run it with --reload)."}
+            >
+              ⚠ brain is running older code · {s.brainCode.newer_files} file{s.brainCode.newer_files > 1 ? "s" : ""} changed
+            </span>
+          )}
           <label className="rt-check" title="Fade functions that were not seen at runtime (only armed functions are traced)">
             <input type="checkbox" checked={s.dimUnobserved} onChange={(e) => routesStore.setDimUnobserved(e.target.checked)} />
             Dim unobserved

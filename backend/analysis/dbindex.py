@@ -17,6 +17,7 @@ from typing import Any
 
 from backend.analysis.engine import Analysis
 from backend.analysis.funcview import data_summary, function_view
+from backend.analysis.relations import mongo_references, neo4j_edges
 
 #: how far to trust where a field came from (lower = better)
 _SOURCE_RANK = {"model": 0, "write": 1, "cypher": 2, "query": 3}
@@ -36,6 +37,8 @@ def _new_table(table: str) -> dict[str, Any]:
         "fields": {},
         "functions": {},
         "endpoints": [],
+        "edges": {},
+        "indexes": [],
     }
 
 
@@ -50,7 +53,7 @@ def _merge_field(table: dict[str, Any], field: dict[str, str]) -> None:
         known["type"] = field["type"]
 
 
-def build_database_index(analysis: Analysis) -> list[dict[str, Any]]:
+def build_database_index(analysis: Analysis) -> dict[str, Any]:
     registry = analysis.registry
     tables: dict[str, dict[str, Any]] = {}
 
@@ -66,6 +69,9 @@ def build_database_index(analysis: Analysis) -> list[dict[str, Any]]:
                 rec["ops"][op] = rec["ops"].get(op, 0) + n
             for f in t["fields"]:
                 _merge_field(rec, f)
+            for e in t.get("edges", ()):
+                known = rec["edges"].get((e["from"], e["to"]))
+                rec["edges"][(e["from"], e["to"])] = e if known is None else {**known, "uncertain": known["uncertain"] and e["uncertain"]}
             ops: set[str] = set()
             chain: list[str] | None = None
             for f in t["functions"]:
@@ -95,12 +101,20 @@ def build_database_index(analysis: Analysis) -> list[dict[str, Any]]:
         for f in fields:
             _merge_field(rec, f)
 
+    # indexes / constraints the code creates — a project-wide scan: they are usually made at startup
+    # by functions no endpoint calls, so a table may have indexes but no endpoint at all
+    for table, defs in analysis.callgraph.index_definitions().items():
+        rec = tables.setdefault(table, _new_table(table))
+        rec["indexes"] = defs
+
     out: list[dict[str, Any]] = []
     for rec in tables.values():
         rec["functions"] = sorted(rec["functions"].values(), key=lambda f: (f["op"], f["name"]))
         rec["fields"] = sorted(rec["fields"].values(), key=lambda f: (_SOURCE_RANK.get(f["source"], 9), f["name"]))
         rec["endpoints"].sort(key=lambda e: (e["path"], e["method"]))
+        rec["edges"] = list(rec["edges"].values())
         if not rec["endpoints"]:
             rec["uncertain"] = False
         out.append(rec)
-    return sorted(out, key=lambda r: (r["database"], r["kind"], r["table"]))
+    out.sort(key=lambda r: (r["database"], r["kind"], r["table"]))
+    return {"tables": out, "relationships": neo4j_edges(out) + mongo_references(out)}

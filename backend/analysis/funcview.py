@@ -62,9 +62,9 @@ def function_view(root: N) -> N:
         if data:
             meta["data"] = [
                 {
-                    k: (list(v.values()) if k == "fields" else v)
+                    k: (list(v.values()) if k in ("fields", "edges") else v)
                     for k, v in e.items()
-                    if k != "engine" and not (k == "uncertain" and not v) and not (k == "fields" and not v)
+                    if k != "engine" and not (k == "uncertain" and not v) and not (k in ("fields", "edges") and not v)
                 }
                 for e in sorted(data.values(), key=lambda e: (e["table"], e["op"]))
             ]
@@ -113,7 +113,7 @@ def function_view(root: N) -> N:
                 unattributed = bool(c.meta.get("unattributed"))
                 entry = data.get((table, op, unattributed))
                 if entry is None:
-                    entry = data[(table, op, unattributed)] = {"table": table, "op": op, "count": 0, "engine": c.meta.get("engine"), "fields": {}}
+                    entry = data[(table, op, unattributed)] = {"table": table, "op": op, "count": 0, "engine": c.meta.get("engine"), "fields": {}, "edges": {}}
                     if unattributed:
                         entry["unattributed"] = True
                         for k, v in (("via", c.meta.get("via")), ("expr", c.call_expr), ("line", c.call_line), ("reason", c.meta.get("reason"))):
@@ -125,6 +125,8 @@ def function_view(root: N) -> N:
                 entry["count"] += c.meta.get("count", 1)
                 for f in c.meta.get("fields", ()):  # inferred columns / properties
                     entry["fields"].setdefault(f["name"], f)
+                for e in c.meta.get("edges", ()):  # label -[type]-> label
+                    entry["edges"].setdefault((e["from"], e["to"]), e)
             elif c.kind in LIBRARY_KINDS:
                 if c.kind == "external":
                     name = c.external or c.name
@@ -203,10 +205,13 @@ def data_summary(root: N) -> dict[str, Any]:
             t = tables.setdefault(entry["table"], {
                 "table": entry["table"], "database": _DB_OF_PREFIX.get(prefix, prefix),
                 "kind": _KIND_OF_PREFIX.get(prefix, "collection"), "name": name, "ops": {},
-                "functions": {}, "uncertain": True, "fields": {},
+                "functions": {}, "uncertain": True, "fields": {}, "edges": {},
             })
             for f in entry.get("fields", ()):
                 t["fields"].setdefault(f["name"], f)
+            for e in entry.get("edges", ()):
+                known = t["edges"].get((e["from"], e["to"]))
+                t["edges"][(e["from"], e["to"])] = e if known is None else {**known, "uncertain": known["uncertain"] and e["uncertain"]}
             t["ops"][entry["op"]] = t["ops"].get(entry["op"], 0) + entry["count"]
             uncertain = bool(entry.get("uncertain"))
             t["uncertain"] = t["uncertain"] and uncertain
@@ -224,6 +229,7 @@ def data_summary(root: N) -> dict[str, Any]:
     for t in tables.values():
         t["functions"] = sorted(t["functions"].values(), key=lambda f: (f["op"], f["name"]))
         t["fields"] = list(t["fields"].values())
+        t["edges"] = list(t["edges"].values())
         out.append(t)
     out.sort(key=lambda t: (-len(t["functions"]), t["table"]))
     unmatched_fns = {(u["function_id"], u["path"]) for u in unmatched}

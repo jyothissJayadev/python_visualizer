@@ -14,15 +14,22 @@ import { useRoutesValue } from "./lib/useRoutes";
 import { DatabaseWorkspace } from "./components/database/DatabaseWorkspace";
 import { databaseStore } from "./lib/databaseStore";
 import { useDatabase } from "./lib/useDatabase";
+import { LineageWorkspace } from "./components/lineage/LineageWorkspace";
+import { lineageStore } from "./lib/lineageStore";
+import { useLineageValue } from "./lib/useLineage";
+import "./lineage.css";
 
 export default function App() {
-  const { tab, endpointId, tableId, navigate } = useAppRouter();
+  const { tab, endpointId, tableId, lineageId, focusConnected, navigate } = useAppRouter();
   const [catalogCollapsed, setCatalogCollapsed] = useState(false);
   const [routesSidebarCollapsed, setRoutesSidebarCollapsed] = useState(false);
   const [databaseSidebarCollapsed, setDatabaseSidebarCollapsed] = useState(false);
+  const [lineageSidebarCollapsed, setLineageSidebarCollapsed] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+
   const routesCount = useRoutesValue((r) => r.analysis?.endpoint_count ?? 0);
   const db = useDatabase();
+  const lineageCount = useLineageValue((l) => l.summary?.full_chain_count ?? l.chains.length);
 
   useEffect(() => {
     startSocket();
@@ -38,18 +45,23 @@ export default function App() {
         onToggleRoutesSidebar={() => setRoutesSidebarCollapsed((v) => !v)}
         databaseSidebarCollapsed={databaseSidebarCollapsed}
         onToggleDatabaseSidebar={() => setDatabaseSidebarCollapsed((v) => !v)}
+        lineageSidebarCollapsed={lineageSidebarCollapsed}
+        onToggleLineageSidebar={() => setLineageSidebarCollapsed((v) => !v)}
         activeTab={tab}
         onSelectTab={(t) => {
           if (t === "routes") {
             navigate("routes", routesStore.getSnapshot().selectedId ?? undefined);
           } else if (t === "database") {
             navigate("database", databaseStore.getSnapshot().selectedTableId ?? undefined);
+          } else if (t === "lineage") {
+            navigate("lineage", lineageStore.getSnapshot().selectedChainId ?? undefined);
           } else {
             navigate("terminal");
           }
         }}
         routesCount={routesCount}
         databaseCount={db.schema.tables.length}
+        lineageCount={lineageCount}
       />
 
       {/* Terminal View: Persists in DOM to keep WebSocket stream and span state alive */}
@@ -86,8 +98,22 @@ export default function App() {
         <DatabaseWorkspace
           active={tab === "database"}
           urlTableId={tableId}
+          urlFocusConnected={focusConnected}
           sidebarCollapsed={databaseSidebarCollapsed}
           onTableChange={(id) => navigate("database", id)}
+        />
+      </div>
+
+      {/* Lineage View: End-to-End Brain -> Backend -> Client API -> UI Component Lineage */}
+      <div
+        className="workspace-body lineage-workspace-wrapper"
+        style={{ display: tab === "lineage" ? "flex" : "none" }}
+      >
+        <LineageWorkspace
+          active={tab === "lineage"}
+          urlChainId={lineageId}
+          sidebarCollapsed={lineageSidebarCollapsed}
+          onChainChange={(id) => navigate("lineage", id)}
         />
       </div>
 

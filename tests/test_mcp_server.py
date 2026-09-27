@@ -60,8 +60,8 @@ async def test_mcp_arm_functions():
         res = await arm_functions(["app.services:calc"], deep=True)
         assert res["ok"] is True
         mock_post.assert_called_once_with(
-            "/viewer/terminal/selection",
-            {"selections": [{"id": "app.services:calc", "deep": True}]},
+            "/viewer/terminal/selection/update",
+            {"add": [{"id": "app.services:calc", "deep": True}]},
         )
 
 
@@ -87,3 +87,62 @@ async def test_mcp_get_function_io():
 
 
 
+
+
+@pytest.mark.asyncio
+async def test_mcp_disarm_clear_and_get_armed():
+    from backend.mcp_server import clear_armed, disarm_functions, get_armed
+
+    with patch("backend.mcp_server._fetch_post", new_callable=AsyncMock) as post:
+        post.return_value = {"ok": True}
+        await disarm_functions([" a:f ", ""])
+        post.assert_called_with("/viewer/terminal/selection/update", {"remove": ["a:f"]})
+        await clear_armed()
+        post.assert_called_with("/viewer/terminal/selection/update", {"clear": True})
+    with patch("backend.mcp_server._fetch_get", new_callable=AsyncMock) as get:
+        get.return_value = {"selection": []}
+        assert await get_armed() == {"selection": []}
+
+
+@pytest.mark.asyncio
+async def test_mcp_arm_reports_unknown_ids_with_suggestions():
+    with patch("backend.mcp_server._fetch_post", new_callable=AsyncMock) as post, \
+         patch("backend.mcp_server._fetch_get", new_callable=AsyncMock) as get:
+        post.return_value = {"ok": True, "armed": [], "unresolved": ["app.svc:calcc"]}
+        get.return_value = {"groups": [{"functions": [{"id": "app.svc:calc"}]}]}
+        res = await arm_functions(["app.svc:calcc"])
+        assert res["unknown_ids"] == {"app.svc:calcc": ["app.svc:calc"]}
+        assert "hint" in res
+
+
+@pytest.mark.asyncio
+async def test_mcp_send_request_and_errors_are_actionable():
+    import httpx
+    from backend.mcp_server import send_request, clear_traces
+
+    with patch("backend.mcp_server._fetch_post", new_callable=AsyncMock) as post:
+        post.return_value = {"ok": True, "request_ids": ["r1"]}
+        res = await send_request("POST", "/q", {"a": 1})
+        assert res["request_ids"] == ["r1"]
+        post.assert_called_with("/viewer/terminal/request",
+                                {"method": "POST", "path": "/q", "body": {"a": 1}, "headers": {}}, timeout=60.0)
+        post.side_effect = httpx.ConnectError("refused")
+        assert "cannot reach" in (await clear_traces())["error"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_get_last_io_and_wait_for_trace():
+    from backend.mcp_server import get_last_io, wait_for_trace
+
+    spans = [{"kind": "fn.start", "request_id": "r1", "span_id": "s1"}]
+
+    async def fake_get(path, params=None):
+        if path.endswith("/traces"):
+            return spans
+        return {"value": path.rsplit("/", 1)[1]}
+
+    with patch("backend.mcp_server._fetch_get", side_effect=fake_get):
+        io = await get_last_io("calc")
+        assert (io["input"], io["result"], io["exc"]) == ("input", "result", "exc")
+        out = await wait_for_trace("calc", timeout=0.5)
+        assert "no new trace" in out[0]["error"]

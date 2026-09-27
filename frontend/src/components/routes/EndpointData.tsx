@@ -3,6 +3,7 @@ import { routesStore } from "../../lib/routesStore";
 import { useRoutes } from "../../lib/useRoutes";
 import { displayTable, isDocumented, isRelationship, relationsAmong } from "../../lib/routesData";
 import { DatabaseTableCard } from "../database/DatabaseTableCard";
+import { useDatabase } from "../../lib/useDatabase";
 import type { DatabaseTable } from "../../lib/databaseEngine";
 import type { DataAudit } from "../../lib/routesApi";
 
@@ -113,7 +114,8 @@ export function EndpointData() {
     return { positions, headings, height: y + PAD };
   }, [tables, width]);
 
-  const relations = useMemo(() => relationsAmong(new Set(tables.map((t) => t.id))), [tables]);
+  const derived = useDatabase().schema.relationships; // derived from the code (see databaseCode.ts)
+  const relations = useMemo(() => relationsAmong(new Set(tables.map((t) => t.id)), derived), [tables, derived]);
   const related = useMemo(() => {
     const out = new Set<string>();
     if (hover) {

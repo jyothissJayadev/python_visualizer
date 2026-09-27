@@ -64,7 +64,7 @@ def _index(tmp_path: Path) -> dict[str, dict]:
         p = tmp_path / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(src, encoding="utf-8")
-    return {t["table"]: t for t in build_database_index(Analysis(str(tmp_path)))}
+    return {t["table"]: t for t in build_database_index(Analysis(str(tmp_path)))["tables"]}
 
 
 def test_mongo_fields_are_inferred_from_writes_updates_filters_and_models(tmp_path: Path):
@@ -105,3 +105,70 @@ def test_endpoints_and_functions_with_real_call_chains(tmp_path: Path):
     assert ("save_row", "write") in fns and ("get", "read") in fns and ("touch", "write") in fns
     assert all(f["module"] == "app.store" for f in rows["functions"])
     assert rows["ops"]["read"] >= 1 and rows["ops"]["write"] >= 2
+
+
+def _indexes(tmp_path: Path, files: dict[str, str]) -> dict[str, list[dict]]:
+    for rel, src in {"app/__init__.py": "", **files}.items():
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(src, encoding="utf-8")
+    return {t["table"]: t["indexes"] for t in build_database_index(Analysis(str(tmp_path)))["tables"] if t["indexes"]}
+
+
+def test_mongo_indexes_are_read_from_create_index_calls_including_beanie_collections(tmp_path: Path):
+    got = _indexes(tmp_path, {
+        "app/mongo.py": "def db(): ...\ndef collection(d, n):\n    return db()[f'{d}_{n}']\n",
+        "app/models.py": (
+            "from beanie import Document\n"
+            "class Session(Document):\n"
+            "    session_id: str\n"
+            "    class Settings:\n"
+            "        name = 'sessions'\n"
+            "        indexes = ['session_id', [('a', 1), ('b', -1)]]\n"
+        ),
+        "app/setup.py": (
+            "from pymongo import IndexModel, ASCENDING, DESCENDING\n"
+            "from app.mongo import collection\n"
+            "async def ensure(database):\n"
+            "    await collection('core', 'usage').create_index('ts')\n"
+            "    await collection('core', 'usage').create_index([('operation', 1), ('ts', DESCENDING)])\n"
+            "    sessions = database['sessions']\n"                       # raw name: belongs to the Beanie doc
+            "    await sessions.create_indexes([IndexModel('session_id', unique=True), IndexModel('updated_at', expireAfterSeconds=60)])\n"
+            "    await database['other'].create_indexes([IndexModel([('x', ASCENDING)], name='x_idx')])\n"
+        ),
+    })
+    usage = {(i["kind"], tuple(i["keys"]), i["unique"]) for i in got["mongo:core_usage"]}
+    assert usage == {("index", ("ts",), False), ("index", ("operation", "-ts"), False)}
+    sess = {(i["kind"], tuple(i["keys"]), i["unique"]) for i in got["mongo:Session"]}
+    assert ("index", ("session_id",), True) in sess            # IndexModel(unique=True), via database["sessions"]
+    assert ("ttl", ("updated_at",), False) in sess             # expireAfterSeconds => a TTL index
+    assert ("index", ("a", "-b"), False) in sess               # Beanie `Settings.indexes`
+    assert got["mongo:other"][0]["name"] == "x_idx"            # an unknown raw name is still a table
+
+
+def test_neo4j_indexes_from_constant_lists_and_fstrings_over_imported_labels(tmp_path: Path):
+    got = _indexes(tmp_path, {
+        "app/labels.py": "EV_ITEM = 'EvItem'\nEV_SEC = 'EvSec'\nEV_LABELS = frozenset({EV_ITEM, EV_SEC})\n",
+        "app/schema.py": (
+            "_STATEMENTS = [\n"
+            "    'CREATE CONSTRAINT k IF NOT EXISTS FOR (n:KNode) REQUIRE n.node_id IS UNIQUE',\n"
+            "    'CREATE INDEX kv IF NOT EXISTS FOR (v:KNode) ON (v.project_id, v.path)',\n"
+            "    'CREATE INDEX r IF NOT EXISTS FOR ()-[e:NEXT]-() ON (e.domain)',\n"
+            "]\n"
+            "async def ensure(session):\n"
+            "    from app.labels import EV_LABELS\n"                     # imported *inside* the function
+            "    for label in sorted(EV_LABELS):\n"
+            "        await session.run(\n"
+            "            f'CREATE CONSTRAINT ev_{label.lower()}_id IF NOT EXISTS '\n"
+            "            f'FOR (n:{label}) REQUIRE (n.domain, n.id) IS UNIQUE'\n"
+            "        )\n"
+            "async def unresolved(session, label):\n"
+            "    await session.run(f'CREATE INDEX x FOR (n:{label}) ON (n.a)')\n"   # label unknown: not guessed
+        ),
+    })
+    knode = {(i["kind"], tuple(i["keys"]), i["unique"]) for i in got["neo4j:KNode"]}
+    assert knode == {("constraint", ("node_id",), True), ("index", ("project_id", "path"), False)}
+    assert got["neo4j-rel:NEXT"][0]["keys"] == ["domain"]
+    for label in ("EvItem", "EvSec"):  # one constraint per label in the loop
+        assert [(i["kind"], tuple(i["keys"]), i["unique"]) for i in got[f"neo4j:{label}"]] == [("constraint", ("domain", "id"), True)]
+    assert not any("_UNK_" in t or "\x00" in t for t in got)  # the unresolved statement produced no table

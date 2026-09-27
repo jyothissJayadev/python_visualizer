@@ -36,6 +36,7 @@ class Func:
     is_package: bool = False
     _locals: tuple[dict[str, ast.expr], dict[str, ast.expr]] | None = field(default=None, repr=False)
     _imports: dict[str, tuple[str, str | None]] | None = field(default=None, repr=False)
+    _loops: dict[str, ast.expr] | None = field(default=None, repr=False)
 
     @property
     def signature(self) -> str:
@@ -55,6 +56,16 @@ class Func:
         if self._imports is None:
             self._imports = collect_imports(self.node.body, self.module, self.is_package)
         return self._imports
+
+    def loop_vars(self) -> dict[str, ast.expr]:
+        """`for x in ITERABLE` -> {x: ITERABLE}, for the function's own scope."""
+        if self._loops is None:
+            loops: dict[str, ast.expr] = {}
+            for st in iter_stmts(self.node.body):
+                if isinstance(st, (ast.For, ast.AsyncFor)) and isinstance(st.target, ast.Name):
+                    loops[st.target.id] = st.iter
+            self._loops = loops
+        return self._loops
 
     def locals(self) -> tuple[dict[str, ast.expr], dict[str, ast.expr]]:
         """(name -> last assigned value expr, name -> annotation) for the

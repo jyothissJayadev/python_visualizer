@@ -10,6 +10,7 @@ import {
   routesApi,
   ApiError,
   type AnalysisStatus,
+  type BrainCode,
   type EndpointData,
   type EndpointDetail,
   type FunctionDetail,
@@ -59,6 +60,8 @@ export interface RoutesSnapshot {
   nodeLibrary: Record<string, { items: LibraryCall[]; more: number; below: string[] } | "loading">;
 
   runtime: RuntimeOverlay | null;
+  /** whether brain is running the code the analysis read */
+  brainCode: BrainCode | null;
   /** database tables the selected endpoint touches (derived from the code) */
   data: EndpointData | null;
   selectedTable: string | null;
@@ -113,6 +116,7 @@ function initial(): RoutesSnapshot {
     fnDetails: {},
     nodeLibrary: {},
     runtime: null,
+    brainCode: null,
     data: null,
     selectedTable: null,
     showTables: p.showTables !== false,
@@ -185,7 +189,7 @@ class RoutesStore {
   async loadListing() {
     try {
       const listing = await routesApi.list();
-      this.set({ listing, analysis: listing.analysis, listingError: null });
+      this.set({ listing, analysis: listing.analysis, brainCode: listing.brain_code ?? null, listingError: null });
       if (!listing.analysis.ready) this.pollUntilReady();
     } catch (err) {
       this.set({ listingError: err instanceof Error ? err.message : String(err) });
@@ -219,6 +223,11 @@ class RoutesStore {
     } finally {
       this.set({ rescanning: false });
     }
+  }
+
+  /** Brain checks in about every 30 s; each check-in re-evaluates whether it runs the code on disk. */
+  onCodeStatus(code: BrainCode | undefined) {
+    if (code) this.set({ brainCode: code });
   }
 
   /** Pushed by the backend over the dashboard WebSocket (socket.ts). */

@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
+from backend.analysis.lineage import LineageService
 from backend.analysis.service import CACHE_DIR, AnalysisService
 from backend.api import viewer
+from backend.api.lineage import router as lineage_router
 from backend.api.routes import router as routes_router
 from backend.api.viewer import router as viewer_router
 from backend.config import DEFAULT_IGNORED_DIRECTORIES, ExplorerConfig
@@ -26,14 +29,30 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.explorer_state = ExplorerState(config)
+        viewer.HUB.project_path = config.project_path
         # viewer.HUB is looked up per call: tests replace it
-        service = AnalysisService(config, broadcast=lambda msg: viewer.HUB.broadcast(msg), cache_dir=cache_dir)
+        service = AnalysisService(
+            config,
+            broadcast=lambda msg: viewer.HUB.broadcast(msg),
+            cache_dir=cache_dir,
+            # the terminal's function catalogue (Add / Manage Functions, MCP list_functions) is a
+            # separate scan; keep it in step with the analysis instead of waiting for a manual rescan
+            on_analyzed=app.state.explorer_state.rescan,
+        )
         app.state.analysis_service = service
+        lineage = LineageService(
+            config.project_path,
+            cache_file=(Path(cache_dir) / "lineage_cache.json") if cache_dir is not None else None,
+        )
+        app.state.lineage_service = lineage
         if analyze_on_start:
             await service.start(watch=watch)
+            if watch:  # the lineage scanner runs `node` and reads the sibling apps: only with the file watcher
+                await lineage.start(broadcast=lambda msg: viewer.HUB.broadcast(msg))
         try:
             yield
         finally:
+            await lineage.stop()
             await service.stop()
 
     app = FastAPI(title="Brain Terminal", lifespan=lifespan)
@@ -47,6 +66,7 @@ def create_app(
     )
     app.include_router(viewer_router)
     app.include_router(routes_router)
+    app.include_router(lineage_router)
     return app
 
 

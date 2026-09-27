@@ -9,6 +9,8 @@ interface Props {
   table: DatabaseTable | null;
   relationships: DatabaseRelationship[];
   activeTab: DrawerTab;
+  focusConnectedOnly?: boolean;
+  onToggleFocusConnected?: (focus: boolean) => void;
   onTabChange: (tab: DrawerTab) => void;
   onSelectTable: (id: string) => void;
   onClose: () => void;
@@ -18,6 +20,8 @@ export function DatabaseDetailDrawer({
   table,
   relationships,
   activeTab,
+  focusConnectedOnly = false,
+  onToggleFocusConnected,
   onTabChange,
   onSelectTable,
   onClose,
@@ -89,9 +93,24 @@ export function DatabaseDetailDrawer({
           </div>
         </div>
 
-        <button className="db-drawer-close-btn" onClick={onClose} title="Close drawer">
-          ✕
-        </button>
+        <div className="db-drawer-header-actions">
+          <button
+            type="button"
+            className={`db-drawer-isolate-btn ${focusConnectedOnly ? "active" : ""}`}
+            onClick={() => onToggleFocusConnected?.(!focusConnectedOnly)}
+            title={
+              focusConnectedOnly
+                ? "Exit focus mode and show all tables on canvas"
+                : `Isolate ${table.name} and its connected tables on canvas`
+            }
+          >
+            <span>🎯</span>
+            <span>{focusConnectedOnly ? "Connected Only" : "Isolate on Canvas"}</span>
+          </button>
+          <button className="db-drawer-close-btn" onClick={onClose} title="Close drawer">
+            ✕
+          </button>
+        </div>
       </div>
 
       {/* Drawer Tabs */}
@@ -399,6 +418,25 @@ export function DatabaseDetailDrawer({
               <span className="db-count-badge">
                 {outgoingRels.length + incomingRels.length} total links
               </span>
+            </div>
+
+            {/* Canvas Focus Quick Action Bar */}
+            <div className="db-relations-focus-bar">
+              <button
+                type="button"
+                className={`db-relations-focus-toggle ${focusConnectedOnly ? "active" : ""}`}
+                onClick={() => onToggleFocusConnected?.(!focusConnectedOnly)}
+              >
+                <span className="focus-icon">🎯</span>
+                <span className="focus-text">
+                  {focusConnectedOnly
+                    ? `Showing ${table.name} + ${outgoingRels.length + incomingRels.length} connected tables`
+                    : `Only view ${table.name} and connected tables (${outgoingRels.length + incomingRels.length}) in canvas`}
+                </span>
+                <span className="focus-action-pill">
+                  {focusConnectedOnly ? "Exit Focus" : "Isolate in Canvas"}
+                </span>
+              </button>
             </div>
 
             {/* Outgoing Links */}

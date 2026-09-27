@@ -101,6 +101,9 @@ export class TerminalStore {
 
   /* raw state */
   private events: TraceEvent[] = [];
+  // the collector replays its buffer on every (re)connect; rows are built from
+  // `events`, so an event seen twice would render twice
+  private seenEventKeys = new Set<string>();
   private spans = new Map<string, SpanData>();
   private requests = new Map<string, RequestData>();
   private reqOrder: string[] = [];
@@ -233,6 +236,11 @@ export class TerminalStore {
   }
 
   private ingestEvent(ev: TraceEvent) {
+    if (ev.seq != null) {
+      const key = `${ev.request_id || ""}|${ev.span_id || ""}|${ev.kind}|${ev.seq}`;
+      if (this.seenEventKeys.has(key)) return;
+      this.seenEventKeys.add(key);
+    }
     this.events.push(ev);
     const reqId = ev.request_id || "unscoped";
 
@@ -277,6 +285,11 @@ export class TerminalStore {
   private handleValue(msg: ValueMessage) {
     const span = this.spans.get(msg.span_id);
     if (!span) return;
+    if (msg.error) {
+      // keep the truncated preview; just say why the full value is gone
+      this.pushToast(`Couldn't load full ${msg.field}: ${msg.error}`);
+      return;
+    }
     if (msg.field === "args" && span.startEvent?.data) {
       span.startEvent.data.args = msg.value;
       span.startEvent.data.args_truncated = false;
@@ -458,6 +471,7 @@ export class TerminalStore {
       incoming `cleared` broadcast. */
   private resetStreamState() {
     this.events = [];
+    this.seenEventKeys.clear();
     this.spans.clear();
     this.requests.clear();
     this.reqOrder = [];

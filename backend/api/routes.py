@@ -88,8 +88,11 @@ async def list_routes(request: Request):
         endpoints, unmounted, errors = svc.cached_routes["endpoints"], [], []
     else:
         endpoints, unmounted, errors = [], [], []
+    from backend.api import viewer  # resolved at call time — tests swap viewer.HUB
+
     return JSONResponse({
         "analysis": svc.status_payload(),
+        "brain_code": viewer.brain_code(),
         "groups": group_endpoints(endpoints),
         "unmounted": unmounted,
         "errors": errors,
@@ -162,7 +165,7 @@ async def get_database(request: Request):
     chains), and its fields (from a model, or inferred from the code)."""
     svc = get_service(request)
     _ready(svc)
-    return JSONResponse({"generation": svc.generation, "tables": svc.database_index()})
+    return JSONResponse({"generation": svc.generation, **svc.database_index()})
 
 
 @router.get("/viewer/routes/function")

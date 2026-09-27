@@ -32,6 +32,7 @@ export interface DatabaseSnapshot {
   activeDrawerTab: DrawerTab;
   zoomLevel: number;
   enabledTableIds: Set<string>;
+  focusConnectedOnly: boolean;
   /** the code analysis behind the function / endpoint links */
   codeState: "idle" | "loading" | "ready" | "error";
   codeError: string | null;
@@ -55,6 +56,7 @@ class DatabaseStore {
     activeDrawerTab: "schema",
     zoomLevel: 1,
     enabledTableIds: new Set(BRAIN_DATABASE_SCHEMA.tables.map((t) => t.id)),
+    focusConnectedOnly: false,
     codeState: "idle",
     codeError: null,
     codeAudit: null,
@@ -169,8 +171,8 @@ class DatabaseStore {
     this.snapshot = { ...this.snapshot, codeState: "loading", codeError: null };
     this.emit();
     try {
-      const { tables, generation } = await fetchCodeTables();
-      const { schema, audit } = mergeCodeIntoSchema(tables, generation);
+      const { tables, relationships, generation } = await fetchCodeTables();
+      const { schema, audit } = mergeCodeIntoSchema(tables, relationships, generation);
       const prev = this.snapshot;
       const ids = new Set(schema.tables.map((t) => t.id));
       const before = new Set(prev.schema.tables.map((t) => t.id));
@@ -249,6 +251,41 @@ class DatabaseStore {
     );
   }
 
+  setFocusConnectedOnly(focusConnectedOnly: boolean) {
+    if (this.snapshot.focusConnectedOnly === focusConnectedOnly) return;
+    this.snapshot = { ...this.snapshot, focusConnectedOnly };
+    this.emit();
+  }
+
+  toggleFocusConnectedOnly() {
+    this.setFocusConnectedOnly(!this.snapshot.focusConnectedOnly);
+  }
+
+  /**
+   * Returns the IDs of all tables directly connected to tableId via incoming or outgoing relationships.
+   */
+  getConnectedTableIds(tableId: string): Set<string> {
+    const { schema } = this.snapshot;
+    const connected = new Set<string>();
+    for (const rel of schema.relationships) {
+      if (rel.fromTableId === tableId) {
+        connected.add(rel.toTableId);
+      }
+      if (rel.toTableId === tableId) {
+        connected.add(rel.fromTableId);
+      }
+    }
+    return connected;
+  }
+
+  /**
+   * Returns the full table models directly connected to tableId.
+   */
+  getConnectedTables(tableId: string): DatabaseTable[] {
+    const ids = this.getConnectedTableIds(tableId);
+    return this.snapshot.schema.tables.filter((t) => ids.has(t.id));
+  }
+
   /**
    * Tables that match search query and domain/database filters.
    */
@@ -274,9 +311,24 @@ class DatabaseStore {
   }
 
   /**
-   * Tables that are both filtered AND enabled in view mode via the checklist.
+   * Tables that are visible in the diagram / view mode.
+   * If focusConnectedOnly is active and a table is selected, only the selected table
+   * and all tables directly connected to it are returned!
    */
   getVisibleTables(): DatabaseTable[] {
+    const { schema, selectedTableId, focusConnectedOnly } = this.snapshot;
+
+    if (focusConnectedOnly && selectedTableId) {
+      const selected = schema.tables.find((t) => t.id === selectedTableId);
+      if (!selected) return [];
+
+      const connectedIds = this.getConnectedTableIds(selectedTableId);
+      connectedIds.add(selectedTableId);
+
+      // Return selected table first, then its connected neighbors
+      return schema.tables.filter((t) => connectedIds.has(t.id));
+    }
+
     const filtered = this.getFilteredTables();
     return filtered.filter((t) => this.snapshot.enabledTableIds.has(t.id));
   }

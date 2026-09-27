@@ -49,10 +49,12 @@ class AnalysisService:
         config: ExplorerConfig,
         broadcast: Broadcast | None = None,
         cache_dir: Path | None = CACHE_DIR,
+        on_analyzed: Callable[[], Any] | None = None,
     ):
         self.config = config
         self.project_path = os.path.abspath(config.project_path)
         self._broadcast = broadcast
+        self._on_analyzed = on_analyzed
         self._cache_dir = cache_dir
         self.analysis: Analysis | None = None
         self.fingerprint: str | None = None
@@ -68,7 +70,7 @@ class AnalysisService:
         self._roots: dict[str, tuple[N, dict[str, Any]]] = {}
         self._matcher: EndpointMatcher | None = None
         self._data: dict[str, dict[str, Any]] = {}
-        self._db_index: list[dict[str, Any]] | None = None
+        self._db_index: dict[str, Any] | None = None
         self._lock = asyncio.Lock()
         self._watch_task: asyncio.Task | None = None
 
@@ -144,6 +146,12 @@ class AnalysisService:
             self._db_index = None
             self.cached_routes = None
             await asyncio.to_thread(self._save_cache)
+            if self._on_analyzed is not None:
+                # other views of the same code (the terminal's function catalogue) refresh in step
+                try:
+                    await asyncio.to_thread(self._on_analyzed)
+                except Exception:  # noqa: BLE001
+                    logger.exception("post-analysis refresh failed")
             logger.info(
                 "analysis #%d (%s): %d endpoints in %d ms", self.generation, reason,
                 len(analysis.routes.endpoints), self.duration_ms,
@@ -225,7 +233,7 @@ class AnalysisService:
             self._data[ep.id] = data_summary(built[0])
         return self._data[ep.id]
 
-    def database_index(self) -> list[dict[str, Any]]:
+    def database_index(self) -> dict[str, Any]:
         """Every table brain touches, with its functions, endpoints and fields
         (per analysis generation)."""
         assert self.analysis is not None

@@ -10,6 +10,7 @@ import "../../database.css";
 interface Props {
   active: boolean;
   urlTableId?: string;
+  urlFocusConnected?: boolean;
   sidebarCollapsed: boolean;
   onTableChange: (id: string) => void;
 }
@@ -17,6 +18,7 @@ interface Props {
 export function DatabaseWorkspace({
   active,
   urlTableId,
+  urlFocusConnected,
   sidebarCollapsed,
   onTableChange,
 }: Props) {
@@ -30,6 +32,13 @@ export function DatabaseWorkspace({
       databaseStore.select(urlTableId);
     }
   }, [urlTableId]);
+
+  // Sync URL focus param -> store focus
+  useEffect(() => {
+    if (urlFocusConnected !== undefined) {
+      databaseStore.setFocusConnectedOnly(urlFocusConnected);
+    }
+  }, [urlFocusConnected]);
 
   // Initial table selection (only once on load)
   useEffect(() => {
@@ -116,6 +125,33 @@ export function DatabaseWorkspace({
             </button>
           </div>
 
+          {/* Connected Only Focus Toggle */}
+          <button
+            type="button"
+            className={`db-switch-btn ${db.focusConnectedOnly ? "active" : ""}`}
+            onClick={() => databaseStore.toggleFocusConnectedOnly()}
+            title={
+              db.focusConnectedOnly
+                ? "Exit focus mode and show all tables"
+                : selectedTable
+                ? `Only show ${selectedTable.name} and connected tables on canvas`
+                : "Select a table to isolate it and its connected tables"
+            }
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="10" />
+              <circle cx="12" cy="12" r="4" />
+              <line x1="12" y1="2" x2="12" y2="4" />
+              <line x1="12" y1="20" x2="12" y2="22" />
+              <line x1="2" y1="12" x2="4" y2="12" />
+              <line x1="20" y1="12" x2="22" y2="12" />
+            </svg>
+            <span>Connected Only</span>
+            {db.focusConnectedOnly && (
+              <span className="db-badge-count">{visibleTables.length}</span>
+            )}
+          </button>
+
           {/* Drawer Toggle */}
           <button
             type="button"
@@ -146,6 +182,7 @@ export function DatabaseWorkspace({
           tables={filteredTables}
           selectedTableId={db.selectedTableId}
           enabledTableIds={db.enabledTableIds}
+          focusConnectedOnly={db.focusConnectedOnly}
           searchQuery={db.searchQuery}
           databaseFilter={db.databaseFilter}
           domainFilter={db.domainFilter}
@@ -154,6 +191,7 @@ export function DatabaseWorkspace({
           codeError={db.codeError}
           onSelectTable={handleSelectTable}
           onToggleTableEnabled={(id) => databaseStore.toggleTableEnabled(id)}
+          onToggleFocusConnected={() => databaseStore.toggleFocusConnectedOnly()}
           onEnableAll={() => databaseStore.enableAllTables()}
           onDisableAll={() => databaseStore.disableAllTables()}
           onSearchChange={(q) => databaseStore.setSearchQuery(q)}
@@ -169,8 +207,10 @@ export function DatabaseWorkspace({
               relationships={filteredRelationships}
               selectedTableId={db.selectedTableId}
               relationFilter={db.relationFilter}
+              focusConnectedOnly={db.focusConnectedOnly}
               onSelectTable={handleSelectTable}
               onFilterRelationChange={(rf) => databaseStore.setRelationFilter(rf)}
+              onToggleFocusConnected={(f) => databaseStore.setFocusConnectedOnly(f)}
             />
           ) : (
             <DatabaseMatrixView
@@ -189,6 +229,8 @@ export function DatabaseWorkspace({
             table={selectedTable}
             relationships={db.schema.relationships}
             activeTab={db.activeDrawerTab}
+            focusConnectedOnly={db.focusConnectedOnly}
+            onToggleFocusConnected={(f) => databaseStore.setFocusConnectedOnly(f)}
             onTabChange={(tab) => databaseStore.setActiveDrawerTab(tab)}
             onSelectTable={handleSelectTable}
             onClose={() => setDrawerOpen(false)}

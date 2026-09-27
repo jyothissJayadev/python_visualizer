@@ -8,6 +8,7 @@ interface Props {
   tables: DatabaseTable[];
   selectedTableId: string | null;
   enabledTableIds: Set<string>;
+  focusConnectedOnly?: boolean;
   searchQuery: string;
   databaseFilter: DatabaseFilter;
   domainFilter: DomainFilter;
@@ -16,6 +17,7 @@ interface Props {
   codeError: string | null;
   onSelectTable: (id: string) => void;
   onToggleTableEnabled: (id: string) => void;
+  onToggleFocusConnected?: () => void;
   onEnableAll: () => void;
   onDisableAll: () => void;
   onSearchChange: (q: string) => void;
@@ -28,6 +30,7 @@ export function DatabaseSidebar({
   tables,
   selectedTableId,
   enabledTableIds,
+  focusConnectedOnly = false,
   searchQuery,
   databaseFilter,
   domainFilter,
@@ -36,6 +39,7 @@ export function DatabaseSidebar({
   codeError,
   onSelectTable,
   onToggleTableEnabled,
+  onToggleFocusConnected,
   onEnableAll,
   onDisableAll,
   onSearchChange,
@@ -135,6 +139,18 @@ export function DatabaseSidebar({
           </div>
 
           <div className="db-checklist-actions">
+            <button
+              type="button"
+              className={`db-checklist-btn ${focusConnectedOnly ? "active" : ""}`}
+              onClick={onToggleFocusConnected}
+              title={
+                focusConnectedOnly
+                  ? "Exit connected focus mode and show enabled tables"
+                  : "Show only selected table and its connected tables"
+              }
+            >
+              Connected
+            </button>
             <button
               type="button"
               className="db-checklist-btn"

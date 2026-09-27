@@ -136,3 +136,82 @@ def test_audit_counts_matched_and_lists_the_unmatched(tmp_path: Path):
     assert kinds["neo4j:Context"] == ("label", "neo4j")
     assert next(t for t in result["tables"] if t["table"] == "neo4j:Concept")["uncertain"] is True
     assert next(t for t in result["tables"] if t["table"] == "neo4j:Context")["uncertain"] is False
+
+
+def test_label_read_from_a_typed_parameter_resolves_like_self_label(tmp_path: Path):
+    """`client.label` where `client` is a parameter (not `self`) — brain's edge-rebuild
+    functions are written this way."""
+    files = {
+        "app/__init__.py": "",
+        "app/client.py": (
+            "_BY_DOMAIN = {'quotation': 'Concept', 'execution': 'Entity'}\n"
+            "class Client:\n"
+            "    def __init__(self, domain):\n"
+            "        self.label = _BY_DOMAIN.get(domain, 'Entity')\n"
+            "def get_client(domain) -> Client:\n"
+            "    return Client(domain)\n"
+        ),
+        "app/edges.py": (
+            "async def rebuild(client, session):\n"
+            "    await session.run(f'MATCH (:{client.label})-[r:CO_OCCURS_WITH]->() DELETE r')\n"
+        ),
+        "app/main.py": (
+            "from fastapi import FastAPI\n"
+            "from app.client import get_client\n"
+            "from app.edges import rebuild\n"
+            "app = FastAPI()\n"
+            "@app.post('/x')\n"
+            "async def x(session=None):\n"
+            "    client = get_client('quotation')\n"
+            "    await rebuild(client, session)\n"
+        ),
+    }
+    for rel, src in files.items():
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(src, encoding="utf-8")
+    a = Analysis(str(tmp_path))
+    view = function_view(a.callgraph.endpoint_root(a.endpoint("POST /x")))
+    got = _entries(view, "rebuild")
+    assert ("neo4j:Concept", "write", True, False) in got and ("neo4j:Entity", "write", True, False) in got
+    assert ("neo4j-rel:CO_OCCURS_WITH", "write", False, False) in got
+    assert not any(t == "?" for t, *_ in got)  # nothing left unresolved
+
+
+def test_transaction_functions_and_loop_variables_are_followed(tmp_path: Path):
+    """`session.execute_write(work)` runs `work` (where the query is), and
+    `for stmt in QUERIES: session.run(stmt)` takes its queries from the list."""
+    files = {
+        "app/__init__.py": "",
+        "app/store.py": (
+            "_CONSTRAINTS = [\n"
+            "    'CREATE CONSTRAINT k IF NOT EXISTS FOR (n:KNode) REQUIRE n.node_id IS UNIQUE',\n"
+            "    'CREATE INDEX v IF NOT EXISTS FOR (v:KNodeVersion) ON (v.node_id)',\n"
+            "]\n"
+            "async def ensure(s):\n"
+            "    for statement in _CONSTRAINTS:\n"
+            "        await s.run(statement)\n"
+            "async def insert(s, node):\n"
+            "    async def work(tx):\n"
+            "        await tx.run('CREATE (n:KNode) SET n = $p')\n"
+            "        await tx.run('MATCH (n:KNode), (p:KNode) CREATE (n)-[:CHILD_OF]->(p)')\n"
+            "    await s.execute_write(work)\n"
+        ),
+        "app/main.py": (
+            "from fastapi import FastAPI\nfrom app import store\napp = FastAPI()\n"
+            "@app.post('/x')\nasync def x(s=None):\n    await store.ensure(s)\n    await store.insert(s, 1)\n"
+        ),
+    }
+    for rel, src in files.items():
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(src, encoding="utf-8")
+    a = Analysis(str(tmp_path))
+    result = data_summary(function_view(a.callgraph.endpoint_root(a.endpoint("POST /x"))))
+    assert result["audit"]["unmatched"] == [], "neither call may be left as an unknown table"
+    tables = {t["table"] for t in result["tables"]}
+    assert {"neo4j:KNode", "neo4j:KNodeVersion", "neo4j-rel:CHILD_OF"} <= tables
+    fns = {f["name"] for t in result["tables"] if t["table"] == "neo4j:KNodeVersion" for f in t["functions"]}
+    assert fns == {"ensure"}  # the constraint list is attributed to the function that runs it
+    insert_fns = {f["name"] for t in result["tables"] if t["table"] == "neo4j-rel:CHILD_OF" for f in t["functions"]}
+    assert insert_fns == {"work"}  # the transaction function owns its queries

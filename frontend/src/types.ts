@@ -69,7 +69,8 @@ export interface ValueMessage {
   kind: "value";
   span_id: string;
   field: "args" | "result" | string;
-  value: unknown;
+  value?: unknown;
+  error?: string;
 }
 
 export interface SelectionAppliedMessage {
@@ -169,3 +170,131 @@ export interface LoopGroup {
   memberSpanIds: string[];
   expanded: boolean;
 }
+
+// ── Lineage Cross-Layer Types ───────────────────────────────────────────────
+export type LineageChainStatus =
+  | "full_chain"
+  | "client_api"
+  | "backend_exposed"
+  | "service_only"
+  | "unexposed";
+
+export interface LineageEndpoint {
+  id: string;
+  method: string;
+  path: string;
+  handler_id: string;
+  handler_name: string;
+  file_path: string;
+  line: number;
+  summary?: string | null;
+  docstring?: string | null;
+  tags?: string[];
+  is_async?: boolean;
+  conditional?: boolean;
+  factory?: string | null;
+}
+
+export interface LineageServiceCall {
+  serviceFunc: string;
+  rawPath: string;
+  cleanPath: string;
+  method: string;
+  file: string;
+  line: number;
+}
+
+export interface LineageController {
+  controllerFunc: string;
+  file: string;
+  line: number;
+}
+
+export interface LineageExpressRoute {
+  method: string;
+  fullPath: string;
+  subPath: string;
+  file: string;
+  line: number;
+}
+
+export interface LineageBackendBridge {
+  service: LineageServiceCall;
+  controller: LineageController | null;
+  routes: LineageExpressRoute[];
+}
+
+export interface LineageClientApi {
+  app: "admin" | "frontend";
+  apiFunc: string;
+  url: string;
+  rawUrl?: string;
+  method: string;
+  file: string;
+  line: number;
+}
+
+export interface LineageUiUsage {
+  app: "admin" | "frontend";
+  apiFunc: string;
+  component: string;
+  callerFunc: string;
+  file: string;
+  line: number;
+  snippet?: string;
+}
+
+export interface LineageClientBridge {
+  app: "admin" | "frontend";
+  api: LineageClientApi;
+  ui: LineageUiUsage[];
+}
+
+export interface LineageChainStats {
+  services_count: number;
+  routes_count: number;
+  client_apis_count: number;
+  ui_usages_count: number;
+}
+
+export interface LineageChain {
+  id: string;
+  method: string;
+  path: string;
+  domain: string;
+  endpoint: LineageEndpoint;
+  backend: LineageBackendBridge[];
+  clients: LineageClientBridge[];
+  status: LineageChainStatus;
+  stats: LineageChainStats;
+}
+
+export interface LineageSummary {
+  total_brain_endpoints: number;
+  full_chain_count: number;
+  client_api_count: number;
+  backend_exposed_count: number;
+  service_only_count: number;
+  unexposed_count: number;
+  admin_connected_count: number;
+  frontend_connected_count: number;
+}
+
+export interface LineageAnalysisResponse {
+  status: "idle" | "scanning" | "error";
+  error?: string | null;
+  /** the code changed since this was scanned */
+  stale?: boolean;
+  last_scanned_at?: number | null;
+  timestamp?: number;
+  duration_ms?: number;
+  directories?: {
+    brain: string;
+    backend: string;
+    frontend: string;
+    admin: string;
+  };
+  summary: LineageSummary;
+  chains: LineageChain[];
+}
+

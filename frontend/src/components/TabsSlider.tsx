@@ -6,6 +6,7 @@ interface Props {
   onSelectTab: (tab: AppTab) => void;
   routesCount?: number;
   databaseCount?: number;
+  lineageCount?: number;
   totalEvents?: number;
 }
 
@@ -14,12 +15,14 @@ export function TabsSlider({
   onSelectTab,
   routesCount = 0,
   databaseCount = 16,
+  lineageCount = 0,
   totalEvents = 0,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalBtnRef = useRef<HTMLButtonElement>(null);
   const routesBtnRef = useRef<HTMLButtonElement>(null);
   const databaseBtnRef = useRef<HTMLButtonElement>(null);
+  const lineageBtnRef = useRef<HTMLButtonElement>(null);
 
   const [indicatorStyle, setIndicatorStyle] = useState<{
     left: number;
@@ -41,6 +44,8 @@ export function TabsSlider({
         activeBtn = routesBtnRef.current;
       } else if (activeTab === "database") {
         activeBtn = databaseBtnRef.current;
+      } else if (activeTab === "lineage") {
+        activeBtn = lineageBtnRef.current;
       }
 
       const container = containerRef.current;
@@ -69,9 +74,10 @@ export function TabsSlider({
       if (terminalBtnRef.current) observer.observe(terminalBtnRef.current);
       if (routesBtnRef.current) observer.observe(routesBtnRef.current);
       if (databaseBtnRef.current) observer.observe(databaseBtnRef.current);
+      if (lineageBtnRef.current) observer.observe(lineageBtnRef.current);
       return () => observer.disconnect();
     }
-  }, [activeTab, routesCount, databaseCount, totalEvents]);
+  }, [activeTab, routesCount, databaseCount, lineageCount, totalEvents]);
 
   return (
     <div
@@ -174,6 +180,36 @@ export function TabsSlider({
         <span className="tab-label">Database</span>
         <span className="tab-badge database-count-badge">
           {databaseCount > 0 ? databaseCount : "Schema"}
+        </span>
+      </button>
+
+      <button
+        ref={lineageBtnRef}
+        type="button"
+        role="tab"
+        aria-selected={activeTab === "lineage"}
+        className={`tabs-slider-btn ${activeTab === "lineage" ? "active active-lineage" : ""}`}
+        onClick={() => onSelectTab("lineage")}
+        title="End-to-End Lineage: Brain Endpoint → Backend Service/Route → Client API → UI Component"
+      >
+        <svg
+          width="13"
+          height="13"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          className="tab-icon"
+        >
+          <rect x="2" y="3" width="5" height="5" rx="1" />
+          <rect x="17" y="3" width="5" height="5" rx="1" />
+          <rect x="2" y="16" width="5" height="5" rx="1" />
+          <rect x="17" y="16" width="5" height="5" rx="1" />
+          <path d="M7 5.5h10M4.5 8v8M19.5 8v8M7 18.5h10" />
+        </svg>
+        <span className="tab-label">Lineage</span>
+        <span className="tab-badge lineage-count-badge">
+          {lineageCount > 0 ? lineageCount : "E2E"}
         </span>
       </button>
     </div>

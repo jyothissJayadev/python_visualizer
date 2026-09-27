@@ -13,7 +13,9 @@ import {
   BRAIN_DATABASE_SCHEMA,
   type DatabaseEndpointLineage,
   type DatabaseField,
+  type DatabaseIndex,
   type DatabaseFunctionUsage,
+  type DatabaseRelationship,
   type DatabaseSchema,
   type DatabaseTable,
 } from "./databaseEngine";
@@ -44,6 +46,15 @@ export interface CodeEndpoint {
   ops: string[];
 }
 
+/** An index / constraint the code creates. */
+export interface CodeIndex {
+  name: string;
+  keys: string[]; // a leading "-" marks descending
+  unique: boolean;
+  kind: "index" | "constraint" | "ttl";
+  source: string; // file:line
+}
+
 export interface CodeTable {
   table: string; // "mongo:quotation_rows" | "mongo:ChatSession" | "neo4j:KNode" | "neo4j-rel:IS_A"
   database: "mongodb" | "neo4j";
@@ -52,8 +63,22 @@ export interface CodeTable {
   ops: Record<string, number>;
   uncertain: boolean;
   fields: CodeField[];
+  indexes: CodeIndex[];
   functions: CodeFunction[];
   endpoints: CodeEndpoint[];
+}
+
+/** A connection between two tables, derived from the code. */
+export interface CodeRelationship {
+  id: string;
+  from: string;
+  to: string;
+  type: "mongo_fk" | "neo4j_edge" | "cross_database";
+  label: string;
+  confidence: "exact" | "inferred";
+  uncertain: boolean;
+  fields: string[];
+  evidence: { function_id: string | null; name: string }[];
 }
 
 /** How the documented schema and the code compare. */
@@ -66,14 +91,19 @@ export interface SchemaAudit {
   undocumented: { id: string; name: string; fields: number }[];
   /** tables whose field list is (partly) inferred rather than documented */
   inferredFieldTables: number;
-  /** functions / endpoints per table now come from code; nothing invented remains */
+  /** documented fields the code does not have: `exact` when a model class is the authority, otherwise
+      only "not seen in anything the code writes or queries" */
+  staleFields: { table: string; name: string; exact: boolean }[];
+  /** connections drawn between tables: exact (stated by the code) and inferred (from field names) */
+  exactRelations: number;
+  inferredRelations: number;
   generation: number;
 }
 
-export async function fetchCodeTables(): Promise<{ tables: CodeTable[]; generation: number }> {
+export async function fetchCodeTables(): Promise<{ tables: CodeTable[]; relationships: CodeRelationship[]; generation: number }> {
   const res = await fetch("/viewer/routes/database");
   if (!res.ok) throw new Error(res.status === 503 ? "the analysis is still running" : `HTTP ${res.status}`);
-  return (await res.json()) as { tables: CodeTable[]; generation: number };
+  return (await res.json()) as { tables: CodeTable[]; relationships: CodeRelationship[]; generation: number };
 }
 
 const SOURCE_NOTE: Record<CodeField["source"], string> = {
@@ -85,6 +115,10 @@ const SOURCE_NOTE: Record<CodeField["source"], string> = {
 
 function inferredField(f: CodeField): DatabaseField {
   return { name: f.name, type: f.type === "any" ? "unknown" : f.type, doc: `Inferred — ${SOURCE_NOTE[f.source]}` };
+}
+
+function indexesOf(t: CodeTable): DatabaseIndex[] {
+  return t.indexes.map((i) => ({ name: i.name, keys: i.keys, unique: i.unique, type: i.kind }));
 }
 
 function functionsOf(t: CodeTable): DatabaseFunctionUsage[] {
@@ -118,7 +152,11 @@ const GRID_COLS = 5;
 const GRID_X = 310;
 const GRID_Y = 300;
 
-export function mergeCodeIntoSchema(code: CodeTable[], generation: number): { schema: DatabaseSchema; audit: SchemaAudit } {
+export function mergeCodeIntoSchema(
+  code: CodeTable[],
+  derived: CodeRelationship[],
+  generation: number,
+): { schema: DatabaseSchema; audit: SchemaAudit } {
   const base = BRAIN_DATABASE_SCHEMA;
   const byId = new Map(code.map((c) => [c.table, c]));
   const documentedIds = new Set(base.tables.map((t) => t.id));
@@ -126,10 +164,11 @@ export function mergeCodeIntoSchema(code: CodeTable[], generation: number): { sc
   // documented tables: keep the documentation, take the links (and any extra fields) from the code
   const tables: DatabaseTable[] = base.tables.map((t) => {
     const c = byId.get(t.id);
-    if (!c) return { ...t, functions: [], endpoints: [] };
+    if (!c) return { ...t, functions: [], endpoints: [], indexes: [] };
     const known = new Set(t.fields.map((f) => f.name));
     const extra = c.fields.filter((f) => !known.has(f.name)).map(inferredField);
-    return { ...t, fields: [...t.fields, ...extra], functions: functionsOf(c), endpoints: endpointsOf(c) };
+    // indexes come from the code (create_index / CREATE INDEX ...), never from the documentation
+    return { ...t, fields: [...t.fields, ...extra], indexes: indexesOf(c), functions: functionsOf(c), endpoints: endpointsOf(c) };
   });
 
   // tables only the code knows about
@@ -150,7 +189,7 @@ export function mergeCodeIntoSchema(code: CodeTable[], generation: number): { sc
       type: c.database === "neo4j" ? "graph_node" : "collection",
       doc: PLACEHOLDER_DOC[c.kind],
       fields,
-      indexes: [],
+      indexes: indexesOf(c),
       functions: functionsOf(c),
       endpoints: endpointsOf(c),
       x: 60 + (i % GRID_COLS) * GRID_X,
@@ -159,10 +198,46 @@ export function mergeCodeIntoSchema(code: CodeTable[], generation: number): { sc
   });
 
   const count = (db: "mongodb" | "neo4j") => tables.filter((t) => t.database === db).length;
+  // connections come from the code only (the hand-written list is gone): exact Neo4j edges, and
+  // Mongo references inferred from field names. Both ends must be a table we list.
+  const ids = new Set(tables.map((t) => t.id));
+  const relationships: DatabaseRelationship[] = derived
+    .filter((r) => ids.has(r.from) && ids.has(r.to))
+    .map((r) => ({
+      id: r.id,
+      fromTableId: r.from,
+      toTableId: r.to,
+      fromField: r.type === "neo4j_edge" ? undefined : r.fields[0],
+      type: r.type,
+      label: r.type === "neo4j_edge" && r.uncertain ? `${r.label}?` : r.label,
+      confidence: r.confidence,
+      uncertain: r.uncertain,
+      evidence: r.evidence,
+      doc:
+        r.confidence === "exact"
+          ? `Neo4j edge ${r.label} — stated by the Cypher in ${r.evidence.map((e) => e.name).join(", ") || "the code"}${r.uncertain ? " (the label is chosen at runtime)" : ""}.`
+          : `Inferred from the field name${r.fields.length > 1 ? "s" : ""} ${r.fields.join(", ")} — a name-based guess, not stated by the code.`,
+    }));
+
+  // A Neo4j edge runs between two labels (Concept -[IS_A]-> Concept). The relationship-type card
+  // (`[IS_A]`) sits in that edge, so connect it to the labels it joins — otherwise it has no links.
+  const membership: DatabaseRelationship[] = derived
+    .filter((r) => r.type === "neo4j_edge")
+    .flatMap((r) => {
+      const relTable = `neo4j-rel:${r.label}`;
+      if (!ids.has(relTable) || !ids.has(r.from) || !ids.has(r.to)) return [];
+      const shared = { type: "neo4j_edge" as const, confidence: "exact" as const, uncertain: r.uncertain, evidence: r.evidence };
+      return [
+        { ...shared, id: `${r.id}#source`, fromTableId: r.from, toTableId: relTable, label: "source", doc: `${r.label} starts at this label.` },
+        { ...shared, id: `${r.id}#target`, fromTableId: relTable, toTableId: r.to, label: "target", doc: `${r.label} ends at this label.` },
+      ];
+    });
+
   const schema: DatabaseSchema = {
     ...base,
     databases: base.databases.map((d) => ({ ...d, count: count(d.id) })),
     tables,
+    relationships: [...relationships, ...membership],
   };
 
   const audit: SchemaAudit = {
@@ -171,6 +246,17 @@ export function mergeCodeIntoSchema(code: CodeTable[], generation: number): { sc
     documentedUnused: base.tables.filter((t) => !byId.has(t.id)).map((t) => ({ id: t.id, name: t.name })),
     undocumented: fresh.map((c) => ({ id: c.table, name: c.name, fields: c.fields.length })),
     inferredFieldTables: code.filter((c) => c.fields.some((f) => f.source !== "model") ).length,
+    staleFields: base.tables.flatMap((t) => {
+      const c = byId.get(t.id);
+      if (!c || c.fields.length === 0) return [];
+      const seen = new Set(c.fields.map((f) => f.name));
+      const exact = c.fields.some((f) => f.source === "model"); // a model class is the authority
+      return t.fields
+        .filter((f) => !seen.has(f.name) && f.name !== "_id" && f.name !== "id")
+        .map((f) => ({ table: t.id, name: f.name, exact }));
+    }),
+    exactRelations: relationships.filter((r) => r.confidence === "exact").length,
+    inferredRelations: relationships.filter((r) => r.confidence === "inferred").length,
     generation,
   };
   return { schema, audit };

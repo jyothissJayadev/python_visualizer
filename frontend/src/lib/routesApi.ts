@@ -38,8 +38,19 @@ export interface EndpointGroup {
   endpoints: EndpointSummary[];
 }
 
+/** Is brain running the code that is on disk? (brain reports when it started; any file newer than that
+    means the running process is older than the analysis.) */
+export interface BrainCode {
+  state: "current" | "older" | "unknown";
+  connected: boolean;
+  newer_files: number;
+  newest_file: string | null;
+  newest_at?: string | null;
+}
+
 export interface RoutesListing {
   analysis: AnalysisStatus;
+  brain_code?: BrainCode;
   groups: EndpointGroup[];
   unmounted: { id: string; file_path: string; line: number; route_count: number }[];
   errors: string[];

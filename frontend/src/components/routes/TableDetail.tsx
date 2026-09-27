@@ -2,6 +2,7 @@ import { routesStore } from "../../lib/routesStore";
 import { useRoutes } from "../../lib/useRoutes";
 import { OP_LABEL, displayTable, isDocumented, openInDatabaseView, relationsOf, shortTable, tableLabel } from "../../lib/routesData";
 import type { TableOp } from "../../lib/routesApi";
+import { useDatabase } from "../../lib/useDatabase";
 
 const OPS: TableOp[] = ["read", "write", "upsert", "delete"];
 
@@ -9,6 +10,7 @@ const OPS: TableOp[] = ["read", "write", "upsert", "delete"];
     which functions do it, and (when documented) its fields and relationships. */
 export function TableDetail() {
   const s = useRoutes();
+  const allRelations = useDatabase().schema.relationships;
   const usage = s.data?.tables.find((t) => t.table === s.selectedTable);
 
   if (!s.data) {
@@ -52,7 +54,7 @@ export function TableDetail() {
 
   const table = displayTable(usage);
   const documented = isDocumented(usage.table);
-  const relations = relationsOf(usage.table);
+  const relations = relationsOf(usage.table, allRelations);
   const byOp = OPS.map((op) => ({ op, fns: usage.functions.filter((f) => f.op === op) })).filter((g) => g.fns.length);
 
   return (

@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
+import urllib.error
 import urllib.request
 from collections import deque
 from pathlib import Path
@@ -60,6 +62,8 @@ class TelemetryHub:
         # the last selection the dashboard applied — [{"id","deep"}]
         self.selection: list[dict[str, Any]] = []
         self.scan_fingerprint: str | None = None
+        self.project_path: str | None = None  # set at startup; lets us compare brain's start time with the code on disk
+        self.last_register_ts: float = 0.0
         self.stats = {"events_in": 0, "dropped_by_brain": 0, "registers": 0}
 
     # -- ingest --------------------------------------------------------
@@ -69,6 +73,7 @@ class TelemetryHub:
             self.brain_base_url = cleaned
         self.registered_at = started_at
         self.brain_fingerprint = code_fingerprint
+        self.last_register_ts = time.time()
         self.stats["registers"] += 1
 
     async def ingest(self, events: list[dict], dropped: int = 0) -> None:
@@ -183,6 +188,59 @@ async def set_terminal_selection(payload: dict):
     return JSONResponse({"ok": True, **result})
 
 
+@router.get("/viewer/terminal/selection")
+async def get_terminal_selection():
+    """The currently armed selection, plus whether brain is reachable to honour it."""
+    return {"selection": HUB.selection, "brain_connected": HUB.brain_base_url is not None}
+
+
+@router.post("/viewer/terminal/selection/update")
+async def update_terminal_selection(payload: dict):
+    """Incrementally change the armed set: ``add`` merges (re-adding an id updates
+    its deep flag), ``remove`` drops ids, ``clear`` empties it. Unlike
+    ``POST /selection`` this never wipes what the caller didn't mention."""
+    current = {s["id"]: bool(s.get("deep")) for s in HUB.selection}
+    if payload.get("clear"):
+        current = {}
+    for fid in payload.get("remove") or []:
+        current.pop(str(fid).strip(), None)
+    for s in payload.get("add") or []:
+        if s.get("id"):
+            current[str(s["id"]).strip()] = bool(s.get("deep"))
+    HUB.selection = [{"id": fid, "deep": deep} for fid, deep in current.items()]
+    if not HUB.brain_base_url:
+        return JSONResponse({"ok": False, "selection": HUB.selection, "armed": [], "unresolved": [], "error": "brain not registered"})
+    result = await _push_selection(HUB.selection)
+    await HUB.broadcast({"kind": "selection_applied", **result})
+    return JSONResponse({"ok": "error" not in result, "selection": HUB.selection, **result})
+
+
+@router.post("/viewer/terminal/traces/clear")
+async def clear_terminal_traces():
+    dropped = len(HUB.recent)
+    await _clear_buffer()
+    return {"ok": True, "dropped": dropped}
+
+
+@router.post("/viewer/terminal/request")
+async def send_terminal_request(payload: dict):
+    """Fire a request at brain (only the registered brain — never an arbitrary URL)
+    and report which trace request_id(s) it produced."""
+    if not HUB.brain_base_url:
+        return JSONResponse({"ok": False, "error": "brain not registered"}, status_code=503)
+    method = str(payload.get("method") or "GET").upper()
+    path = str(payload.get("path") or "/")
+    if not path.startswith("/") or "://" in path or path.startswith("//"):
+        return JSONResponse({"ok": False, "error": "path must be a relative path starting with '/'"}, status_code=400)
+    started = _now()
+    outcome = await _http_request(
+        method, f"{HUB.brain_base_url}{path}", payload.get("body"), payload.get("headers") or {}
+    )
+    await asyncio.sleep(0.4)  # let brain's batched spans reach ingest
+    request_ids = _request_ids_since(started, outcome["headers"].get("x-request-id"))
+    return JSONResponse({"ok": outcome["status"] is not None, "request_ids": request_ids, **outcome})
+
+
 @router.get("/viewer/terminal/value/{request_id}/{span_id}/{field}")
 async def get_terminal_span_value(request_id: str, span_id: str, field: str):
     """Fetch full value (input, result, or exc) for a specific span from brain."""
@@ -192,8 +250,10 @@ async def get_terminal_span_value(request_id: str, span_id: str, field: str):
     try:
         data = await _http_get_json(url)
         return JSONResponse({"span_id": span_id, "field": field, "value": data.get("value")})
+    except urllib.error.HTTPError as exc:
+        return JSONResponse({"error": _brain_error(exc)}, status_code=exc.code)
     except Exception as exc:  # noqa: BLE001
-        return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+        return JSONResponse({"error": _brain_error(exc)}, status_code=500)
 
 
 
@@ -266,7 +326,7 @@ async def ingest(payload: dict):
                     "data": {"level": "info", "line": f"brain registered ({HUB.brain_base_url})"},
                 }
             )
-        await HUB.broadcast({"kind": "code_status", "in_sync": _code_in_sync(), "brain": HUB.brain_fingerprint})
+        await HUB.broadcast(_code_status_message())
         # re-arm whatever the dashboard last applied (brain restart / fresh connect)
         if HUB.selection:
             asyncio.create_task(_push_selection(HUB.selection))
@@ -284,7 +344,7 @@ async def ingest(payload: dict):
 async def websocket_terminal_endpoint(websocket: WebSocket):
     await websocket.accept()
     HUB.clients.add(websocket)
-    await HUB.send_one(websocket, {"kind": "code_status", "in_sync": _code_in_sync(), "brain": HUB.brain_fingerprint})
+    await HUB.send_one(websocket, _code_status_message())
     for event in list(HUB.recent)[-800:]:
         await HUB.send_one(websocket, event)
 
@@ -342,28 +402,54 @@ async def _proxy_get_value(ws: WebSocket, data: dict) -> None:
     span_id, field, request_id = data.get("span_id"), data.get("field", "result"), data.get("request_id")
     reply: dict[str, Any] = {"kind": "value", "span_id": span_id, "field": field}
     if not HUB.brain_base_url or not request_id:
-        reply["value"] = {"error": "brain not registered or request_id missing"}
+        reply["error"] = "brain not registered or request_id missing"
         await HUB.send_one(ws, reply)
         return
     url = f"{HUB.brain_base_url}/__telemetry__/value/{request_id}/{span_id}/{field}?__trace=0"
     try:
         reply["value"] = (await _http_get_json(url)).get("value")
     except Exception as exc:  # noqa: BLE001
-        reply["value"] = {"error": f"{type(exc).__name__}: {exc}"}
+        # sent as `error`, not `value`, so the dashboard keeps its preview
+        reply["error"] = _brain_error(exc)
     await HUB.send_one(ws, reply)
 
 
 # ─────────────────────────────────────────────────────────────────────────
 # helpers
 # ─────────────────────────────────────────────────────────────────────────
+BRAIN_SEEN_WITHIN = 90.0  # brain re-registers about every 30 s; silence beyond this means it is gone
+
+
+def brain_code() -> dict[str, Any]:
+    """Is brain running the code that is on disk? (see analysis/coderun.py)"""
+    connected = HUB.brain_base_url is not None and (time.time() - HUB.last_register_ts) < BRAIN_SEEN_WITHIN
+    if not connected or not HUB.project_path:
+        return {"state": "unknown", "connected": connected, "newer_files": 0, "newest_file": None}
+    from backend.analysis.coderun import brain_code_status
+
+    return {"connected": True, **brain_code_status(HUB.project_path, HUB.registered_at)}
+
+
 def _code_in_sync() -> bool | None:
-    if HUB.brain_fingerprint is None or HUB.scan_fingerprint is None:
-        return None
-    # git fingerprints compare directly; mtime/scan fingerprints are
-    # advisory only — treat "both present" as best-effort in sync unless
-    # brain reports a git sha we can't correlate. Kept simple: only assert
-    # a mismatch when brain has a git sha (deterministic) — otherwise None.
-    return None if not str(HUB.brain_fingerprint).startswith("git:") else True
+    state = brain_code()["state"]
+    return None if state == "unknown" else state == "current"
+
+
+def _code_status_message() -> dict[str, Any]:
+    return {"kind": "code_status", "in_sync": _code_in_sync(), "brain": HUB.brain_fingerprint, "code": brain_code()}
+
+
+def _brain_error(exc: Exception) -> str:
+    """Human-readable reason for a failed brain call. For an HTTP error, use
+    brain's own ``detail`` (e.g. a 404 "request not in the recent ring buffer",
+    meaning brain restarted or has since recorded 32+ newer requests)."""
+    if isinstance(exc, urllib.error.HTTPError):
+        try:
+            detail = json.loads(exc.read().decode("utf-8", "replace")).get("detail")
+        except Exception:  # noqa: BLE001
+            detail = None
+        return f"brain returned {exc.code}: {detail or exc.reason}"
+    return f"{type(exc).__name__}: {exc}"
 
 
 async def _http_get_json(url: str, timeout: float = 5.0) -> dict:
@@ -384,6 +470,42 @@ async def _http_post_json(url: str, body: dict, timeout: float = 10.0) -> dict:
             return json.loads(raw) if raw else {}
 
     return await asyncio.to_thread(_do)
+
+
+async def _http_request(method: str, url: str, body: Any, headers: dict, timeout: float = 30.0) -> dict:
+    def _do() -> dict:
+        data = None
+        hdrs = {"accept": "application/json", **{str(k): str(v) for k, v in headers.items()}}
+        if body is not None:
+            data = json.dumps(body).encode("utf-8")
+            hdrs.setdefault("content-type", "application/json")
+        req = urllib.request.Request(url, data=data, method=method, headers=hdrs)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - registered brain only
+                status, raw, rh = resp.status, resp.read(), dict(resp.headers)
+        except urllib.error.HTTPError as exc:
+            status, raw, rh = exc.code, exc.read(), dict(exc.headers)
+        except Exception as exc:  # noqa: BLE001
+            return {"status": None, "headers": {}, "body": None, "error": f"{type(exc).__name__}: {exc}"}
+        text = raw.decode("utf-8", "replace")
+        try:
+            parsed: Any = json.loads(text)
+        except ValueError:
+            parsed = text[:20000]
+        return {"status": status, "headers": {k.lower(): v for k, v in rh.items()}, "body": parsed}
+
+    return await asyncio.to_thread(_do)
+
+
+def _request_ids_since(ts: float, header_id: str | None) -> list[str]:
+    if header_id:
+        return [header_id]
+    seen: list[str] = []
+    for e in HUB.recent:
+        rid = e.get("request_id")
+        if rid and rid != "system" and (e.get("ts") or 0) >= ts and rid not in seen:
+            seen.append(rid)
+    return seen
 
 
 def _now() -> float:

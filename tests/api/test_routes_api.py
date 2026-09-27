@@ -3,6 +3,7 @@ and the AnalysisService behind it (fingerprint, refresh, cache, watcher)."""
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
@@ -213,3 +214,46 @@ def test_cli_rejects_a_nonexistent_project(capsys):
         parse_args(["--project", "/path/to/atomics_estimate_engine/apps/brain"])
     err = capsys.readouterr().err
     assert "does not exist" in err and "placeholder" in err
+
+
+def test_terminal_catalogue_follows_code_changes_without_a_manual_rescan(make_client):
+    """The terminal's function catalogue is a separate scan from the route analysis; it must
+    refresh whenever the analysis does (it used to stay stale until someone pressed Rescan)."""
+    client, root = make_client(watch=True)
+    first = _wait_ready(client)
+
+    def catalogue() -> set[str]:
+        return {f["name"] for g in client.get("/viewer/terminal/functions").json()["groups"] for f in g["functions"]}
+
+    assert "brand_new" not in catalogue()
+    time.sleep(0.5)
+    (root / "app" / "svc.py").write_text(
+        (root / "app" / "svc.py").read_text() + "def brand_new():\n    return 1\n", encoding="utf-8"
+    )
+    _wait_ready(client, min_generation=first["generation"] + 1, timeout=15)
+    assert "brand_new" in catalogue()
+
+
+def test_routes_report_whether_brain_runs_older_code_than_the_analysis(make_client):
+    client, root = make_client()
+    _wait_ready(client)
+    assert client.get("/viewer/routes").json()["brain_code"]["state"] == "unknown"  # brain has not registered
+
+    started = time.time() - 300
+    iso = lambda t: __import__("datetime").datetime.fromtimestamp(t, tz=__import__("datetime").timezone.utc).isoformat()  # noqa: E731
+    for f in (root / "app").rglob("*.py"):
+        os.utime(f, (started - 60, started - 60))
+    client.post("/viewer/terminal/ingest", json={"kind": "register", "brain_base_url": "http://127.0.0.1:8000",
+                                                 "started_at": iso(started), "code_fingerprint": "git:abc"})
+    assert client.get("/viewer/routes").json()["brain_code"]["state"] == "current"
+
+    now = time.time()
+    os.utime(root / "app" / "svc.py", (now, now))  # edited after brain started
+    code = client.get("/viewer/routes").json()["brain_code"]
+    assert code["state"] == "older" and code["newer_files"] == 1 and code["connected"] is True
+    assert client.get("/viewer/routes/status").json()["code_in_sync"] is False
+
+    viewer.HUB.last_register_ts = time.time() - 600  # brain stopped checking in: not "old code", just gone
+    assert client.get("/viewer/routes").json()["brain_code"] == {
+        "state": "unknown", "connected": False, "newer_files": 0, "newest_file": None,
+    }

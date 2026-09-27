@@ -25,6 +25,12 @@ _NODE_RX = re.compile(r"\(\s*\w*((?:\s*:\s*(?:`[^`]+`|\w+|\x00))+)")
 _NODE_FULL_RX = re.compile(r"\(\s*(\w*)((?:\s*:\s*(?:`[^`]+`|\w+|\x00))+)\s*(\{[^{}]*\})?")
 _REL_FULL_RX = re.compile(r"\[\s*(\w*)\s*:\s*((?:`[^`]+`|\w+|\x00)(?:\s*\|\s*:?\s*(?:`[^`]+`|\w+|\x00))*)\s*(\{[^{}]*\})?")
 _MAP_KEY_RX = re.compile(r"(\w+)\s*:")
+# (a:L1 {..})-[r:TYPE {..}]->(b:L2): variable + labels on each side, direction arrows optional
+_EDGE_RX = re.compile(
+    r"\(\s*(\w*)((?:\s*:\s*(?:`[^`]+`|\w+|\x00))*)[^()]*\)\s*(<)?-\s*\[\s*\w*\s*:\s*"
+    r"((?:`[^`]+`|\w+|\x00)(?:\s*\|\s*:?\s*(?:`[^`]+`|\w+|\x00))*)[^\]]*\]\s*-(>)?\s*"
+    r"\(\s*(\w*)((?:\s*:\s*(?:`[^`]+`|\w+|\x00))*)"
+)
 _ACCESS_RX = re.compile(r"\b(\w+)\.(\w+)\b")
 # a relationship pattern: "[" [variable] ":TYPE" ("|" ":"? TYPE)* — captured whole
 _REL_RX = re.compile(r"\[\s*\w*\s*:\s*((?:`[^`]+`|\w+|\x00)(?:\s*\|\s*:?\s*(?:`[^`]+`|\w+|\x00))*)")
@@ -41,6 +47,8 @@ class CypherFacts:
     #: property names seen per node label / relationship type: `(n:L {a: $a})`, `n.b`
     label_props: dict[str, set[str]] = field(default_factory=dict)
     rel_props: dict[str, set[str]] = field(default_factory=dict)
+    #: (source label, relationship type, target label), in the direction the query draws them
+    edges: set[tuple[str, str, str]] = field(default_factory=set)
 
 
 def looks_like_cypher(text: str) -> bool:
@@ -66,7 +74,34 @@ def extract(text: str) -> CypherFacts:
             elif name.isupper() or "_" in name:  # relationship types are UPPER_SNAKE by convention
                 facts.rels.add(name)
     _collect_props(text, facts)
+    _collect_edges(text, facts)
     return facts
+
+
+def _collect_edges(text: str, facts: CypherFacts) -> None:
+    """Edges between labels. A side written as a bare variable — `MERGE (x)-[:R]->(y)`
+    after `MATCH (x:L1 …) MATCH (y:L2 …)` — takes the labels that variable was bound to."""
+    var_labels: dict[str, set[str]] = {}
+    for m in _NODE_FULL_RX.finditer(text):
+        var = m.group(1)
+        labels = {n for n in _names(m.group(2)) if n != UNKNOWN and n[:1].isupper()}
+        if var and labels:
+            var_labels.setdefault(var, set()).update(labels)
+
+    def side(var: str, group: str) -> set[str]:
+        named = {n for n in _names(group) if n != UNKNOWN and n[:1].isupper()}
+        return named or var_labels.get(var, set())
+
+    for m in _EDGE_RX.finditer(text):
+        left, right = side(m.group(1), m.group(2)), side(m.group(6), m.group(7))
+        types = {n for n in _names(m.group(4)) if n != UNKNOWN and (n.isupper() or "_" in n)}
+        if not (left and right and types):
+            continue  # a side or the type is unknown: not an edge we can name
+        reverse = bool(m.group(3)) and not m.group(5)
+        for a in left:
+            for b in right:
+                for t in types:
+                    facts.edges.add((b, t, a) if reverse else (a, t, b))
 
 
 def _collect_props(text: str, facts: CypherFacts) -> None:

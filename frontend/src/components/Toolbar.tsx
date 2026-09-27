@@ -2,9 +2,11 @@ import type { AppTab } from "../lib/router";
 import { store } from "../lib/store";
 import { routesStore } from "../lib/routesStore";
 import { databaseStore } from "../lib/databaseStore";
+import { lineageStore } from "../lib/lineageStore";
 import { useRoutesValue } from "../lib/useRoutes";
 import { useTerminal } from "../lib/useTerminal";
 import { useDatabase } from "../lib/useDatabase";
+import { useLineage } from "../lib/useLineage";
 import { TabsSlider } from "./TabsSlider";
 import { ToolbarStreamMenu } from "./ToolbarStreamMenu";
 
@@ -15,10 +17,13 @@ interface Props {
   onToggleRoutesSidebar?: () => void;
   databaseSidebarCollapsed?: boolean;
   onToggleDatabaseSidebar?: () => void;
+  lineageSidebarCollapsed?: boolean;
+  onToggleLineageSidebar?: () => void;
   activeTab: AppTab;
   onSelectTab: (tab: AppTab) => void;
   routesCount?: number;
   databaseCount?: number;
+  lineageCount?: number;
 }
 
 export function Toolbar({
@@ -28,35 +33,45 @@ export function Toolbar({
   onToggleRoutesSidebar,
   databaseSidebarCollapsed = false,
   onToggleDatabaseSidebar,
+  lineageSidebarCollapsed = false,
+  onToggleLineageSidebar,
   activeTab,
   onSelectTab,
   routesCount = 0,
   databaseCount = 16,
+  lineageCount = 0,
 }: Props) {
   const s = useTerminal();
   const rescanning = useRoutesValue((r) => r.rescanning || r.analysis?.status === "scanning");
   const db = useDatabase();
+  const lineage = useLineage();
 
   const isRailCollapsed =
     activeTab === "terminal"
       ? catalogCollapsed
       : activeTab === "routes"
       ? routesSidebarCollapsed
-      : databaseSidebarCollapsed;
+      : activeTab === "database"
+      ? databaseSidebarCollapsed
+      : lineageSidebarCollapsed;
 
   const onToggleRail =
     activeTab === "terminal"
       ? onToggleCatalog
       : activeTab === "routes"
       ? (onToggleRoutesSidebar || onToggleCatalog)
-      : (onToggleDatabaseSidebar || onToggleCatalog);
+      : activeTab === "database"
+      ? (onToggleDatabaseSidebar || onToggleCatalog)
+      : (onToggleLineageSidebar || onToggleCatalog);
 
   const railTitle =
     activeTab === "terminal"
       ? "Toggle Function Catalog Rail"
       : activeTab === "routes"
       ? "Toggle Routes Sidebar Rail"
-      : "Toggle Database Sidebar Rail";
+      : activeTab === "database"
+      ? "Toggle Database Sidebar Rail"
+      : "Toggle Lineage Sidebar Rail";
 
   return (
     <header className="app-toolbar">
@@ -83,6 +98,7 @@ export function Toolbar({
           onSelectTab={onSelectTab}
           routesCount={routesCount}
           databaseCount={databaseCount}
+          lineageCount={lineageCount}
           totalEvents={s.totalEvents}
         />
 
@@ -145,6 +161,62 @@ export function Toolbar({
               </svg>
               {db.rescanning ? "Scanning…" : "Rescan Schemas"}
             </button>
+          </div>
+        )}
+
+        {/* Lineage Cross-Layer Actions */}
+        {activeTab === "lineage" && (
+          <div className="toolbar-actions">
+            <div className="search-filter-box">
+              <svg className="search-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="11" cy="11" r="8" />
+                <path d="m21 21-4.35-4.35" />
+              </svg>
+              <input
+                type="text"
+                placeholder="Search Brain endpoint, backend route, UI component..."
+                value={lineage.searchQuery}
+                onChange={(e) => lineageStore.setSearch(e.target.value)}
+              />
+              {lineage.searchQuery && (
+                <button
+                  className="search-clear-btn"
+                  onClick={() => lineageStore.setSearch("")}
+                  title="Clear search"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+
+            <button
+              className="btn-sm"
+              title="Re-analyze end-to-end full stack lineage (Brain, Backend, Frontend, Admin)"
+              disabled={lineage.rescanning}
+              onClick={() => void lineageStore.rescan()}
+            >
+              <svg
+                className={lineage.rescanning ? "spin" : ""}
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
+              </svg>
+              {lineage.rescanning ? "Scanning Stack…" : "Rescan Lineage"}
+            </button>
+            {!lineage.rescanning && (lineage.scanning || lineage.stale) && (
+              <span
+                className="lineage-stale-badge"
+                title="Source files changed since this lineage was scanned"
+                style={{ fontSize: 11, marginLeft: 8, opacity: 0.8 }}
+              >
+                {lineage.scanning ? "Code changed — rescanning…" : "Code changed — stale"}
+              </span>
+            )}
           </div>
         )}
       </div>

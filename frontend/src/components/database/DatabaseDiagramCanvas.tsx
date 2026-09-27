@@ -11,8 +11,10 @@ interface Props {
   relationships: DatabaseRelationship[];
   selectedTableId: string | null;
   relationFilter: "all" | RelationType;
+  focusConnectedOnly?: boolean;
   onSelectTable: (id: string) => void;
   onFilterRelationChange: (filter: "all" | RelationType) => void;
+  onToggleFocusConnected?: (focus: boolean) => void;
 }
 
 const CARD_WIDTH = 260;
@@ -38,8 +40,10 @@ export function DatabaseDiagramCanvas({
   relationships,
   selectedTableId,
   relationFilter,
+  focusConnectedOnly = false,
   onSelectTable,
   onFilterRelationChange,
+  onToggleFocusConnected,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -76,14 +80,37 @@ export function DatabaseDiagramCanvas({
     return map;
   }, [tables]);
 
+  const selectedTable = selectedTableId ? tableMap.get(selectedTableId) ?? null : null;
+
   const getTablePos = useCallback(
     (t: DatabaseTable): Point => {
-      return customPositions[t.id] ?? { x: t.x ?? 0, y: t.y ?? 0 };
+      if (customPositions[t.id]) return customPositions[t.id];
+
+      // When focusConnectedOnly is active, arrange cleanly in an orbit around selectedTableId
+      if (focusConnectedOnly && selectedTableId) {
+        if (t.id === selectedTableId) {
+          return { x: 500, y: 380 };
+        }
+        const otherTables = tables.filter((x) => x.id !== selectedTableId);
+        const idx = otherTables.findIndex((x) => x.id === t.id);
+        if (idx >= 0) {
+          const total = otherTables.length;
+          const angle = (2 * Math.PI * idx) / total - Math.PI / 2;
+          const rx = Math.max(390, total * 58);
+          const ry = Math.max(270, total * 42);
+          return {
+            x: Math.round(500 + rx * Math.cos(angle)),
+            y: Math.round(380 + ry * Math.sin(angle)),
+          };
+        }
+      }
+
+      return { x: t.x ?? 0, y: t.y ?? 0 };
     },
-    [customPositions]
+    [customPositions, focusConnectedOnly, selectedTableId, tables]
   );
 
-  // Fit to screen calculation (Explicit action or initial mount ONLY)
+  // Fit to screen calculation
   const handleFitToScreen = useCallback(() => {
     if (!containerRef.current || tables.length === 0) return;
     const rect = containerRef.current.getBoundingClientRect();
@@ -106,7 +133,8 @@ export function DatabaseDiagramCanvas({
 
     const scaleX = (rect.width - 40) / contentWidth;
     const scaleY = (rect.height - 40) / contentHeight;
-    const targetZoom = Math.min(1.0, Math.max(0.68, Math.min(scaleX, scaleY)));
+    const minZoom = focusConnectedOnly ? 0.45 : 0.68;
+    const targetZoom = Math.min(1.0, Math.max(minZoom, Math.min(scaleX, scaleY)));
 
     const targetPanX =
       contentWidth * targetZoom > rect.width
@@ -122,9 +150,9 @@ export function DatabaseDiagramCanvas({
 
     setZoom(targetZoom);
     setPan({ x: targetPanX, y: targetPanY });
-  }, [tables, getTablePos]);
+  }, [tables, getTablePos, focusConnectedOnly]);
 
-  // Initial fit ONLY ONCE on mount — NEVER automatically on hover or selection!
+  // Initial fit ONLY ONCE on mount
   const hasInitialFitRef = useRef(false);
   useEffect(() => {
     if (!hasInitialFitRef.current && tables.length > 0) {
@@ -132,6 +160,27 @@ export function DatabaseDiagramCanvas({
       handleFitToScreen();
     }
   }, [tables.length, handleFitToScreen]);
+
+  // Auto-fit smoothly when focusConnectedOnly toggles or selected table changes in focus mode
+  const prevFocusRef = useRef<{ active: boolean; tableId: string | null }>({
+    active: false,
+    tableId: null,
+  });
+
+  useEffect(() => {
+    const focusActive = Boolean(focusConnectedOnly);
+    const focusChanged = focusActive !== prevFocusRef.current.active;
+    const tableChanged = focusActive && selectedTableId !== prevFocusRef.current.tableId;
+
+    if (focusChanged || tableChanged) {
+      prevFocusRef.current = { active: focusActive, tableId: selectedTableId };
+      setCustomPositions({});
+      const timer = setTimeout(() => {
+        handleFitToScreen();
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [focusConnectedOnly, selectedTableId, handleFitToScreen]);
 
   // Card mouse down for dragging
   const handleCardMouseDown = (tableId: string, e: React.MouseEvent) => {
@@ -376,6 +425,30 @@ export function DatabaseDiagramCanvas({
         }}
       />
 
+      {/* Floating Focus Connected Table Banner */}
+      {focusConnectedOnly && selectedTable && (
+        <div className="db-focus-banner">
+          <div className="db-focus-banner-left">
+            <span className="db-focus-target-icon">🎯</span>
+            <span className="db-focus-text">
+              Focusing <strong>{selectedTable.name}</strong> +{" "}
+              <strong>{tables.length - 1}</strong> connected {tables.length - 1 === 1 ? "table" : "tables"}
+            </span>
+            <span className={`db-focus-db-badge ${selectedTable.database}`}>
+              {selectedTable.database === "mongodb" ? "MongoDB" : "Neo4j"}
+            </span>
+          </div>
+          <button
+            type="button"
+            className="db-focus-exit-btn"
+            onClick={() => onToggleFocusConnected?.(false)}
+            title="Exit focus mode and show all tables in the database"
+          >
+            Show All Tables
+          </button>
+        </div>
+      )}
+
       {tables.length === 0 ? (
         <div className="db-canvas-empty-overlay">
           <div className="empty-box">
@@ -449,7 +522,7 @@ export function DatabaseDiagramCanvas({
                   {/* Stylized visible bezier path */}
                   <path
                     d={p.d}
-                    className={`db-rel-path db-rel-${p.type}`}
+                    className={`db-rel-path db-rel-${p.type}${p.rel.confidence === "inferred" ? " inferred" : ""}`}
                     markerEnd={marker}
                   />
 
@@ -528,6 +601,26 @@ export function DatabaseDiagramCanvas({
 
       {/* Floating Relationship Filter Chips on Canvas */}
       <div className="db-canvas-relation-filters">
+        <button
+          className={`db-filter-chip focus-chip ${focusConnectedOnly ? "active" : ""}`}
+          onClick={() => onToggleFocusConnected?.(!focusConnectedOnly)}
+          title={
+            focusConnectedOnly
+              ? "Exit focus mode and show all tables"
+              : selectedTable
+              ? `Only show ${selectedTable.name} and connected tables on canvas`
+              : "Select a table to isolate it and its connected tables"
+          }
+        >
+          <span className="chip-icon">🎯</span>
+          <span>Connected Only</span>
+          {focusConnectedOnly && (
+            <span className="chip-count">{tables.length}</span>
+          )}
+        </button>
+
+        <div className="db-filter-divider" />
+
         <button
           className={`db-filter-chip ${relationFilter === "all" ? "active" : ""}`}
           onClick={() => onFilterRelationChange("all")}

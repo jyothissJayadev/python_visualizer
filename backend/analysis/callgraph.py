@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import ast
 import builtins
+import itertools
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -142,6 +143,40 @@ class GraphDef:
     edges: list[tuple[str, str]]
     cond: list[tuple[str, ast.expr, dict[str, str]]]
     entry: str | None
+
+
+_NEO4J_NODE_SCHEMA = re.compile(
+    r"CREATE\s+(?:(?:RANGE|TEXT|POINT|FULLTEXT|LOOKUP)\s+)?(INDEX|CONSTRAINT)\s+(\w+)?\s*(?:IF\s+NOT\s+EXISTS\s+)?"
+    r"FOR\s*\(\s*\w*\s*:\s*`?(\w+)`?\s*\)\s*(?:ON|REQUIRE)\s*\(?([^)]*?)\)?\s*(IS\s+UNIQUE|IS\s+NOT\s+NULL|IS\s+NODE\s+KEY)?\s*$",
+    re.I,
+)
+_NEO4J_REL_SCHEMA = re.compile(
+    r"CREATE\s+(?:\w+\s+)?(INDEX|CONSTRAINT)\s+(\w+)?\s*(?:IF\s+NOT\s+EXISTS\s+)?"
+    r"FOR\s*\(\)\s*-\s*\[\s*\w*\s*:\s*`?(\w+)`?\s*\]\s*-\s*\(\)\s*(?:ON|REQUIRE)\s*\(?([^)]*?)\)?\s*(IS\s+UNIQUE|IS\s+NOT\s+NULL)?\s*$",
+    re.I,
+)
+
+
+def parse_neo4j_schema_statement(text: str) -> list[tuple[str, list[str], bool, str, str | None]]:
+    """`CREATE CONSTRAINT k IF NOT EXISTS FOR (n:KNode) REQUIRE n.node_id IS UNIQUE` ->
+    [("neo4j:KNode", ["node_id"], True, "constraint", "k")]."""
+    out = []
+    for stmt in text.split(";"):
+        stmt = " ".join(stmt.replace(UNKNOWN, "_UNK_").split())
+        for rx, prefix in ((_NEO4J_NODE_SCHEMA, "neo4j"), (_NEO4J_REL_SCHEMA, "neo4j-rel")):
+            m = rx.search(stmt)
+            if not m:
+                continue
+            kind, name, label, props, tail = (m.group(i) for i in (1, 2, 3, 4, 5))
+            if "_UNK_" in label or "_UNK_" in props:
+                break  # the label or a property could not be resolved: not a table we can name
+            if name and "_UNK_" in name:
+                name = None
+            keys = [p.split(".")[-1].strip().strip("`") for p in props.replace("(", "").split(",") if p.strip()]
+            unique = bool(tail and ("UNIQUE" in tail.upper() or "NODE KEY" in tail.upper()))
+            out.append((f"{prefix}:{label}", keys, unique, kind.lower(), name))
+            break
+    return out
 
 
 def _short(text: str, n: int = 110) -> str:
@@ -494,16 +529,24 @@ class CallGraph:
         if isinstance(expr, ast.Constant):
             return [expr.value] if isinstance(expr.value, str) else [UNKNOWN]
         if isinstance(expr, ast.JoinedStr):
-            acc = [""]
+            # The same placeholder written twice (`(a:{label})-[]->(b:{label})`) is one value
+            # at runtime, so it must take the same candidate in both places — otherwise a
+            # label with candidates {Concept, Entity} would wrongly yield Concept -> Entity too.
+            options: dict[str, list[str]] = {}
             for v in expr.values:
-                if isinstance(v, ast.Constant):
-                    part = [str(v.value)]
-                elif isinstance(v, ast.FormattedValue):
-                    part = self.str_templates(module, F, v.value, env, depth + 1)
-                else:
-                    part = [UNKNOWN]
-                acc = self._cross(acc, part)
-            return acc
+                if isinstance(v, ast.FormattedValue):
+                    options.setdefault(ast.dump(v.value), self.str_templates(module, F, v.value, env, depth + 1))
+            keys = list(options)
+            out: list[str] = []
+            for combo in itertools.islice(itertools.product(*(options[k] for k in keys)), MAX_TEMPLATES):
+                chosen = dict(zip(keys, combo))
+                out.append("".join(
+                    str(v.value) if isinstance(v, ast.Constant)
+                    else chosen[ast.dump(v.value)] if isinstance(v, ast.FormattedValue)
+                    else UNKNOWN
+                    for v in expr.values
+                ))
+            return list(dict.fromkeys(out)) or [""]
         if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Add):
             return self._cross(
                 self.str_templates(module, F, expr.left, env, depth + 1),
@@ -513,6 +556,11 @@ class CallGraph:
             return self._name_templates(module, F, expr.id, env, depth)
         if isinstance(expr, ast.Attribute) and isinstance(expr.value, ast.Name) and expr.value.id == "self" and F is not None:
             return self._self_attr_templates(F, expr.attr, depth)
+        if isinstance(expr, ast.Attribute) and F is not None:
+            # `client.label` where `client` is a parameter / local of a known class
+            base = self.eval_expr(module, F, expr.value, env)
+            if base is not None and base.kind == "inst":
+                return self._class_attr_templates(base.ref, expr.attr, depth)
         if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute) and expr.func.attr == "get" and expr.args:
             values = self._dict_values(module, expr.func.value)
             if values is not None:
@@ -535,8 +583,45 @@ class CallGraph:
             assigns, _ = f.locals()
             if name in assigns:
                 return self.str_templates(f.module, f, assigns[name], env, depth + 1)
+            if name in f.loop_vars():
+                return self._iter_templates(f.module, f, f.loop_vars()[name], env, depth + 1)
+            if name in f.imports:  # `from x import EV_ITEM` done inside the function
+                target = self.index.resolve_import(*f.imports[name])
+                if target and target[1]:
+                    expr = self.reg.module_assigns.get(target[0], {}).get(target[1])
+                    return self.str_templates(target[0], None, expr, {}, depth + 1) if expr is not None else [UNKNOWN]
             f = self.reg.funcs.get(f.parent_id) if f.parent_id else None
         return self._module_templates(module, name, depth)
+
+    def _iter_templates(self, module: str, F: Func | None, expr: ast.AST, env: Env, depth: int) -> list[str]:
+        """Every string an iteration variable may take: `for q in (A, B, "…")` / `for q in QUERIES`."""
+        if depth > 8:
+            return [UNKNOWN]
+        if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name) and expr.func.id in ("sorted", "list", "tuple", "set", "frozenset", "reversed") and expr.args:
+            return self._iter_templates(module, F, expr.args[0], env, depth + 1)
+        if isinstance(expr, ast.Name):
+            imports = {}
+            g = F
+            while g is not None:  # imports done inside the function, then the module's own
+                imports = {**g.imports, **imports}
+                g = self.reg.funcs.get(g.parent_id) if g.parent_id else None
+            mod = self.index.modules.get(module)
+            if mod is not None:
+                imports = {**mod.imports, **imports}
+            target_module, target = module, expr.id
+            if expr.id in imports:
+                res = self.index.resolve_import(*imports[expr.id])
+                if not res or res[1] is None:
+                    return [UNKNOWN]
+                target_module, target = res
+            node = self.reg.module_assigns.get(target_module, {}).get(target)
+            return self._iter_templates(target_module, None, node, env, depth + 1) if node is not None else [UNKNOWN]
+        if isinstance(expr, (ast.List, ast.Tuple, ast.Set)):
+            out: list[str] = []
+            for el in expr.elts:
+                out.extend(self.str_templates(module, F, el, env, depth + 1))
+            return list(dict.fromkeys(out))[:MAX_TEMPLATES] or [UNKNOWN]
+        return [UNKNOWN]
 
     def _module_templates(self, module: str, name: str, depth: int) -> list[str]:
         mod = self.index.modules.get(module)
@@ -553,7 +638,11 @@ class CallGraph:
 
     def _self_attr_templates(self, F: Func, attr: str, depth: int) -> list[str]:
         """`self.label` -> what the class assigns to it (in __init__ first)."""
-        cls = self.reg.classes.get(F.class_id or "")
+        return self._class_attr_templates(F.class_id or "", attr, depth)
+
+    def _class_attr_templates(self, cid: str, attr: str, depth: int) -> list[str]:
+        """What a class assigns to `attr`: a class-level constant, or `self.attr = …` in its methods."""
+        cls = self.reg.classes.get(cid)
         if cls is None:
             return [UNKNOWN]
         for st in cls.node.body:  # class-level `label = "X"`
@@ -606,8 +695,13 @@ class CallGraph:
                     continue
                 if is_str(child):
                     yield child
-                else:
-                    yield from walk(child)
+                    continue
+                if (
+                    isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute) and child.func.attr == "run"
+                    and child.args and isinstance(child.args[0], (ast.Name, ast.Attribute))
+                ):
+                    yield child.args[0]  # `s.run(statement)`: resolve where `statement` comes from
+                yield from walk(child)
 
         yield from walk(F.node)
 
@@ -630,8 +724,12 @@ class CallGraph:
             counts: dict[tuple[str, str], int] = {}
             dynamic_ops: set[str] = set()
             props: dict[str, set[str]] = {}
+            edges: dict[tuple[str, str], dict[tuple[str, str], int]] = {}  # (rel table, op) -> {(from, to): candidates seen in}
             for t in templates:
                 facts = extract(t)
+                for src, rel, dst in facts.edges:
+                    seen = edges.setdefault((f"neo4j-rel:{rel}", facts.op), {})
+                    seen[(f"neo4j:{src}", f"neo4j:{dst}")] = seen.get((f"neo4j:{src}", f"neo4j:{dst}"), 0) + 1
                 for label, names in facts.label_props.items():
                     props.setdefault(f"neo4j:{label}", set()).update(names)
                 for rel, names in facts.rel_props.items():
@@ -650,6 +748,10 @@ class CallGraph:
                     entry["uncertain"] = entry["uncertain"] and c < n
                 for name in props.get(table, ()):
                     entry["fields"].setdefault(name, {"name": name, "type": "any", "source": "cypher"})
+                for (frm, to), seen_in in edges.get((table, op), {}).items():
+                    known = entry.setdefault("edges", {}).get((frm, to))
+                    uncertain_edge = seen_in < n
+                    entry["edges"][(frm, to)] = {"from": frm, "to": to, "uncertain": uncertain_edge if known is None else known["uncertain"] and uncertain_edge}
             for op in dynamic_ops:
                 results.setdefault(("?", op), {
                     "table": "?", "op": op, "unattributed": True, "line": getattr(expr, "lineno", None),
@@ -775,6 +877,131 @@ class CallGraph:
             for name, typ in self._filter_keys(F, arg(MONGO_FILTER_ARG[attr]), env).items():
                 found.setdefault(name, {"name": name, "type": typ, "source": "query"})
         return list(found.values())
+
+    # ── index definitions ────────────────────────────────────────────────
+    def index_definitions(self) -> dict[str, list[dict[str, Any]]]:
+        """Indexes and constraints the code creates, per table — read from the code,
+        so they cannot drift the way hand-written ones do.
+
+          * Mongo:   `coll.create_index(...)`, `coll.create_indexes([IndexModel(...)])`
+          * Beanie:  `class Settings: indexes = [...]`
+          * Neo4j:   `CREATE [UNIQUE] INDEX / CONSTRAINT ... FOR (n:Label) ...` in any string,
+                     including module-level lists of statements
+
+        Scans the whole project, not only endpoint-reachable code: indexes are usually
+        created at startup, by functions no endpoint calls."""
+        found: dict[str, dict[tuple, dict[str, Any]]] = {}
+
+        def add(table: str, keys: list[str], unique: bool, kind: str, name: str | None, source: str) -> None:
+            if not keys:
+                return
+            key = (tuple(keys), unique, kind)
+            found.setdefault(table, {}).setdefault(key, {
+                "name": name or ("idx_" + "_".join(k.lstrip("-") for k in keys)), "keys": keys,
+                "unique": unique, "kind": kind, "source": source,
+            })
+
+        # Mongo: create_index / create_indexes on a collection handle
+        for f in self.reg.funcs.values():
+            for node in ast.walk(f.node):
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in ("create_index", "create_indexes")):
+                    continue
+                table = self._collection_table(f, node.func.value)
+                if table is None or not node.args:
+                    continue
+                specs = node.args[0].elts if node.func.attr == "create_indexes" and isinstance(node.args[0], (ast.List, ast.Tuple)) else [node]
+                for spec in specs:
+                    keys, unique, name, ttl = self._mongo_index_spec(spec)
+                    add(table, keys, unique, "ttl" if ttl else "index", name, f"{f.file_path}:{node.lineno}")
+
+        # Beanie: class Settings: indexes = [...]
+        for cid, cls in self.reg.classes.items():
+            table = self.beanie_table(cid)
+            if not table:
+                continue
+            for st in cls.node.body:
+                if isinstance(st, ast.ClassDef) and st.name == "Settings":
+                    for a in st.body:
+                        if isinstance(a, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "indexes" for t in a.targets) and isinstance(a.value, (ast.List, ast.Tuple)):
+                            for el in a.value.elts:
+                                keys, unique, name, ttl = self._mongo_index_spec(el)
+                                add(table, keys, unique, "ttl" if ttl else "index", name, f"{cls.file_path}:{a.lineno}")
+
+        # Neo4j: any string in the project that creates an index / constraint
+        for mod in self.index.modules.values():
+            for node in ast.walk(mod.tree):
+                if isinstance(node, ast.Constant) and isinstance(node.value, str) and "CREATE" in node.value and ("INDEX" in node.value or "CONSTRAINT" in node.value):
+                    for table, keys, unique, kind, name in parse_neo4j_schema_statement(node.value):
+                        add(table, keys, unique, kind, name, f"{mod.file_path}:{node.lineno}")
+        # ... and statements built with f-strings over label constants (`FOR (n:{label})`)
+        for f in self.reg.funcs.values():
+            for expr in self._string_exprs(f):
+                for text in self.str_templates(f.module, f, expr, {}):
+                    if "CREATE" in text and ("INDEX" in text or "CONSTRAINT" in text):
+                        for table, keys, unique, kind, name in parse_neo4j_schema_statement(text):
+                            add(table, keys, unique, kind, name, f"{f.file_path}:{getattr(expr, 'lineno', f.line)}")
+
+        return {t: sorted(d.values(), key=lambda e: (e["kind"], e["keys"])) for t, d in found.items()}
+
+    def _beanie_collection_names(self) -> dict[str, str]:
+        """`class Settings: name = "sessions"` -> {"sessions": "mongo:ChatSession"}."""
+        out: dict[str, str] = {}
+        for cid, cls in self.reg.classes.items():
+            table = self.beanie_table(cid)
+            if not table:
+                continue
+            for st in cls.node.body:
+                if isinstance(st, ast.ClassDef) and st.name == "Settings":
+                    for a in st.body:
+                        if isinstance(a, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "name" for t in a.targets) \
+                                and isinstance(a.value, ast.Constant) and isinstance(a.value.value, str):
+                            out[a.value.value] = table
+        return out
+
+    def _collection_table(self, F: Func, expr: ast.AST) -> str | None:
+        """The table a collection expression names: a resolved handle, or the raw
+        `database["sessions"]` (looked up as a Beanie document's `Settings.name`)."""
+        base = self.eval_expr(F.module, F, expr, {})
+        if base is not None and base.kind == "coll":
+            return base.ref
+        node: ast.AST | None = expr
+        if isinstance(node, ast.Name):
+            assigns, _ = F.locals()
+            node = assigns.get(node.id)
+        if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
+            name = node.slice.value
+            return self._beanie_collection_names().get(name) or f"mongo:{name}"
+        return None
+
+    def _mongo_index_spec(self, spec: ast.AST) -> tuple[list[str], bool, str | None, bool]:
+        """`"ts"`, `[("operation", 1), ("ts", -1)]`, `IndexModel([...], unique=True, name="x")`."""
+        unique, name, ttl = False, None, False
+        node = spec
+        if isinstance(spec, ast.Call):  # IndexModel(...) or the create_index(...) call itself
+            for k in spec.keywords:
+                if k.arg == "unique" and isinstance(k.value, ast.Constant):
+                    unique = bool(k.value.value)
+                elif k.arg == "name" and isinstance(k.value, ast.Constant) and isinstance(k.value.value, str):
+                    name = k.value.value
+                elif k.arg == "expireAfterSeconds":
+                    ttl = True
+            node = spec.args[0] if spec.args else None
+        keys: list[str] = []
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            keys = [node.value]
+        elif isinstance(node, (ast.List, ast.Tuple)):
+            for el in node.elts:
+                if isinstance(el, ast.Constant) and isinstance(el.value, str):
+                    keys.append(el.value)
+                elif isinstance(el, ast.Tuple) and el.elts and isinstance(el.elts[0], ast.Constant) and isinstance(el.elts[0].value, str):
+                    direction = el.elts[1] if len(el.elts) > 1 else None
+                    descending = (
+                        (isinstance(direction, ast.UnaryOp) and isinstance(direction.op, ast.USub))  # -1
+                        or (isinstance(direction, ast.Attribute) and direction.attr == "DESCENDING")  # pymongo.DESCENDING
+                        or (isinstance(direction, ast.Name) and direction.id == "DESCENDING")  # from pymongo import DESCENDING
+                    )
+                    keys.append(("-" if descending else "") + el.elts[0].value)
+        return keys, unique, name, ttl
 
     # ── classes ──────────────────────────────────────────────────────────
     def find_method(self, cid: str, name: str, seen: frozenset[str] = frozenset()) -> str | None:
@@ -1038,7 +1265,7 @@ class CallGraph:
             v = self.eval_expr(F.module, F, func, env)
             if v is None:
                 if func.attr in UNTYPED_DB_ATTRS:
-                    return [("dbunknown", func.attr, text)]
+                    return self._tx_callback(F, call, env, func.attr) or [("dbunknown", func.attr, text)]
                 if func.attr in NOISE_ATTRS or func.attr.startswith("__"):
                     return []
                 if base is not None and base.kind == "inst" and self._has_external_base(base.ref):
@@ -1068,7 +1295,7 @@ class CallGraph:
             if v.ref.startswith(NOISE_EXT_ROOTS) or parts[0] in BUILTIN_NAMES:
                 return []
             if parts[0] == "neo4j" and parts[-1] in NEO4J_RUN_ATTRS:
-                return [("dbunknown", parts[-1], text)]  # session.run(...) / tx.run(...)
+                return self._tx_callback(F, call, env, parts[-1]) or [("dbunknown", parts[-1], text)]  # session.run(...) / tx.run(...)
             if len(parts) >= 3 and parts[-1] in NOISE_ATTRS:  # os.environ.get, obj.items, ...
                 return []
             return [("ext", v.ref)]
@@ -1078,6 +1305,14 @@ class CallGraph:
         if v.kind == "param":
             return [("unresolved", text, "callable parameter — not bound on this path")]
         return [("unresolved", text, "")]
+
+    def _tx_callback(self, F: Func, call: ast.Call, env: Env, attr: str) -> list[tuple] | None:
+        """`session.execute_write(work)`: neo4j calls `work(tx)` — the function that runs the
+        queries. Follow it, so its Cypher is attributed instead of the call being "unknown"."""
+        if attr not in ("execute_read", "execute_write") or not call.args:
+            return None
+        callback = self.eval_expr(F.module, F, call.args[0], env)
+        return [("func", callback.ref, False)] if callback is not None and callback.kind == "func" else None
 
     def _has_external_base(self, cid: str, seen: frozenset[str] = frozenset()) -> bool:
         cls = self.reg.classes.get(cid)
@@ -1136,6 +1371,8 @@ class CallGraph:
                     meta[k] = acc[k]
             if acc.get("fields"):
                 meta["fields"] = list(acc["fields"].values())
+            if acc.get("edges"):
+                meta["edges"] = list(acc["edges"].values())
             kids.append(N(
                 kind="db", name="(unknown)" if acc["table"] == "?" else acc["table"],
                 external=None if acc["table"] == "?" else acc["table"], edge="call",
@@ -1334,7 +1571,7 @@ def render(n: N, path: str, depth: int | None, detail_path: str | None = None) -
     if n.meta:
         meta = dict(n.meta)
         if meta.get("data"):
-            meta["data"] = [{k: v for k, v in e.items() if k != "fields"} for e in meta["data"]]
+            meta["data"] = [{k: v for k, v in e.items() if k not in ("fields", "edges")} for e in meta["data"]]
         below = meta.pop("below", None)  # the list goes only to the selected node; others carry below_count
         if below and path == detail_path:
             meta["below"] = below

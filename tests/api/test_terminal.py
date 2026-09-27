@@ -166,7 +166,7 @@ def test_get_value_without_brain_replies_error(client):
         ws.receive_json()
         ws.send_json({"op": "get_value", "request_id": "r", "span_id": "s", "field": "result"})
         reply = ws.receive_json()
-    assert reply["kind"] == "value" and "error" in reply["value"]
+    assert reply["kind"] == "value" and "error" in reply and "value" not in reply
 
 
 def test_rest_traces_and_selection(client):
@@ -197,3 +197,46 @@ def test_rest_traces_and_selection(client):
     assert sel_res["ok"] is False
     assert viewer.HUB.selection == [{"id": "services.math:calculate", "deep": True}]
 
+
+
+def test_selection_update_merges_removes_and_clears(client):
+    client.post("/viewer/terminal/selection/update", json={"add": [{"id": "a:f", "deep": False}, {"id": "b:g", "deep": True}]})
+    assert client.get("/viewer/terminal/selection").json()["selection"] == [
+        {"id": "a:f", "deep": False}, {"id": "b:g", "deep": True}]
+
+    # add merges (and updates deep), never wipes the rest
+    client.post("/viewer/terminal/selection/update", json={"add": [{"id": "a:f", "deep": True}]})
+    assert {s["id"]: s["deep"] for s in viewer.HUB.selection} == {"a:f": True, "b:g": True}
+
+    client.post("/viewer/terminal/selection/update", json={"remove": ["a:f"]})
+    assert [s["id"] for s in viewer.HUB.selection] == ["b:g"]
+
+    res = client.post("/viewer/terminal/selection/update", json={"clear": True}).json()
+    assert res["ok"] is False and res["error"] == "brain not registered"
+    assert viewer.HUB.selection == []
+
+
+def test_clear_traces_endpoint(client):
+    client.post("/viewer/terminal/ingest", json={"events": [{"kind": "fn.start", "request_id": "r1", "span_id": "s"}]})
+    assert client.post("/viewer/terminal/traces/clear").json() == {"ok": True, "dropped": 1}
+    assert client.get("/viewer/terminal/traces").json() == []
+
+
+def test_send_request_needs_brain_and_rejects_absolute_urls(client):
+    assert client.post("/viewer/terminal/request", json={"path": "/x"}).status_code == 503
+    _register(client)
+    bad = client.post("/viewer/terminal/request", json={"path": "http://evil.example/x"})
+    assert bad.status_code == 400
+    assert client.post("/viewer/terminal/request", json={"path": "//evil.example"}).status_code == 400
+
+
+def test_send_request_reports_request_ids(client, monkeypatch):
+    _register(client)
+
+    async def fake(method, url, body, headers, timeout=30.0):
+        viewer.HUB.recent.append({"kind": "fn.start", "request_id": "req_9", "span_id": "s", "ts": viewer._now() + 1})
+        return {"status": 200, "headers": {}, "body": {"ok": 1}}
+
+    monkeypatch.setattr(viewer, "_http_request", fake)
+    res = client.post("/viewer/terminal/request", json={"method": "get", "path": "/ping"}).json()
+    assert res["ok"] and res["status"] == 200 and res["request_ids"] == ["req_9"]
