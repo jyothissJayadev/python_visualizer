@@ -5,6 +5,8 @@ import { useAppRouter } from "./lib/router";
 import { Toolbar } from "./components/Toolbar";
 import { CatalogPane } from "./components/CatalogPane";
 import { CatalogModal } from "./components/CatalogModal";
+import { TemplateEditModal } from "./components/TemplateEditModal";
+import type { Template } from "./types";
 import { StreamPane } from "./components/StreamPane";
 import { InspectorPane } from "./components/InspectorPane";
 import { Toast } from "./components/Toast";
@@ -26,6 +28,7 @@ export default function App() {
   const [databaseSidebarCollapsed, setDatabaseSidebarCollapsed] = useState(false);
   const [lineageSidebarCollapsed, setLineageSidebarCollapsed] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const [editingTemplate, setEditingTemplate] = useState<Template | null>(null);
 
   const routesCount = useRoutesValue((r) => r.analysis?.endpoint_count ?? 0);
   const db = useDatabase();
@@ -34,6 +37,7 @@ export default function App() {
   useEffect(() => {
     startSocket();
     void store.loadCatalog();
+    void store.loadTemplates();
   }, []);
 
   return (
@@ -72,6 +76,7 @@ export default function App() {
         <CatalogPane
           collapsed={catalogCollapsed}
           onOpenModal={() => setModalOpen(true)}
+          onEditTemplate={setEditingTemplate}
         />
         <StreamPane />
         <InspectorPane />
@@ -118,6 +123,7 @@ export default function App() {
       </div>
 
       <CatalogModal open={modalOpen} onClose={() => setModalOpen(false)} />
+      <TemplateEditModal template={editingTemplate} onClose={() => setEditingTemplate(null)} />
       <Toast />
     </div>
   );

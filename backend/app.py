@@ -10,6 +10,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 
 from backend.analysis.lineage import LineageService
 from backend.analysis.service import CACHE_DIR, AnalysisService
+from backend.analysis.templates import TemplateStore
 from backend.api import viewer
 from backend.api.lineage import router as lineage_router
 from backend.api.routes import router as routes_router
@@ -29,6 +30,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.explorer_state = ExplorerState(config)
+        app.state.template_store = TemplateStore(config.project_path, cache_dir)
         viewer.HUB.project_path = config.project_path
         # viewer.HUB is looked up per call: tests replace it
         service = AnalysisService(

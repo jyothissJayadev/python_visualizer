@@ -17,7 +17,7 @@ SAMPLE_PROJECT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "
 
 
 @pytest.fixture
-def client():
+def client(tmp_path):
     viewer.HUB = viewer.TelemetryHub()
 
     original_cwd = os.getcwd()
@@ -25,8 +25,12 @@ def client():
     modules_before = set(sys.modules)
 
     # analysis off: its analysis_* broadcasts would interleave with the
-    # collector messages these tests assert on (see test_routes_api.py)
-    app = create_app(ExplorerConfig(project_path=SAMPLE_PROJECT), analyze_on_start=False)
+    # collector messages these tests assert on (see test_routes_api.py).
+    # cache_dir is isolated per test (tmp_path) so the templates store
+    # doesn't write into the repo's real .cache/ during test runs.
+    app = create_app(
+        ExplorerConfig(project_path=SAMPLE_PROJECT), analyze_on_start=False, cache_dir=tmp_path / "cache"
+    )
     with TestClient(app) as test_client:
         yield test_client
 
@@ -240,3 +244,131 @@ def test_send_request_reports_request_ids(client, monkeypatch):
     monkeypatch.setattr(viewer, "_http_request", fake)
     res = client.post("/viewer/terminal/request", json={"method": "get", "path": "/ping"}).json()
     assert res["ok"] and res["status"] == 200 and res["request_ids"] == ["req_9"]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Trace Templates
+# ─────────────────────────────────────────────────────────────────────────
+def _real_function_id(client) -> str:
+    catalog = client.get("/viewer/terminal/functions").json()
+    for group in catalog["groups"]:
+        for fn in group["functions"]:
+            if "calculate_total" in fn["id"]:
+                return fn["id"]
+    raise AssertionError("sample_project has no calculate_total function")
+
+
+def test_template_crud_round_trip(client):
+    fid = _real_function_id(client)
+    created = client.post(
+        "/viewer/terminal/templates", json={"name": "checkout", "functions": [{"id": fid, "deep": True}]}
+    ).json()["template"]
+    assert created["name"] == "checkout"
+    assert created["functions"] == [{"id": fid, "deep": True}]
+
+    listed = client.get("/viewer/terminal/templates").json()["templates"]
+    assert len(listed) == 1
+    assert listed[0]["functions"][0]["status"] == "ok"
+
+    updated = client.put(
+        f"/viewer/terminal/templates/{created['id']}", json={"name": "checkout flow"}
+    ).json()["template"]
+    assert updated["name"] == "checkout flow"
+    assert updated["functions"] == [{"id": fid, "deep": True}]  # untouched field preserved
+
+    assert client.delete(f"/viewer/terminal/templates/{created['id']}").json() == {"ok": True}
+    assert client.get("/viewer/terminal/templates").json()["templates"] == []
+
+
+def test_template_validation_rejects_empty_and_duplicate_names(client):
+    fid = _real_function_id(client)
+    payload = {"name": "checkout", "functions": [{"id": fid, "deep": False}]}
+    first = client.post("/viewer/terminal/templates", json=payload)
+    assert first.status_code == 201
+
+    dup = client.post("/viewer/terminal/templates", json=payload)
+    assert dup.status_code == 409
+
+    empty_name = client.post("/viewer/terminal/templates", json={"name": "  ", "functions": [{"id": fid}]})
+    assert empty_name.status_code == 400
+
+    empty_functions = client.post("/viewer/terminal/templates", json={"name": "other", "functions": []})
+    assert empty_functions.status_code == 400
+
+
+def test_template_rename_to_self_is_not_a_duplicate(client):
+    fid = _real_function_id(client)
+    created = client.post(
+        "/viewer/terminal/templates", json={"name": "Checkout", "functions": [{"id": fid, "deep": False}]}
+    ).json()["template"]
+
+    # case-only correction of its own name must not be rejected as a duplicate
+    res = client.put(f"/viewer/terminal/templates/{created['id']}", json={"name": "checkout"})
+    assert res.status_code == 200
+    assert res.json()["template"]["name"] == "checkout"
+
+
+def test_template_missing_function_is_flagged_with_suggestion(client):
+    real_fid = _real_function_id(client)
+    stale_fid = real_fid + "_renamed"  # not in the catalog, but close to a real id
+    client.post("/viewer/terminal/templates", json={"name": "stale", "functions": [{"id": stale_fid, "deep": False}]})
+
+    listed = client.get("/viewer/terminal/templates").json()["templates"][0]["functions"][0]
+    assert listed["status"] == "missing"
+    assert real_fid in listed["suggestions"]
+
+
+def test_template_apply_persists_and_arms_selection_with_saved_mode(client):
+    fid = _real_function_id(client)
+    created = client.post(
+        "/viewer/terminal/templates", json={"name": "checkout", "functions": [{"id": fid, "deep": True}]}
+    ).json()["template"]
+
+    res = client.post(f"/viewer/terminal/templates/{created['id']}/apply").json()
+    assert res["ok"] is False  # no brain registered, matches set_terminal_selection's own contract
+    assert res["error"] == "brain not registered"
+    assert viewer.HUB.selection == [{"id": fid, "deep": True}]
+
+
+def test_template_apply_pushes_unresolved_functions_unconditionally(client, monkeypatch):
+    """apply must behave exactly like arm_functions/set_terminal_selection: it
+    pushes every saved function to brain regardless of local catalog status —
+    it never pre-filters using the static AST scan."""
+    fid = _real_function_id(client)
+    stale_fid = "totally.made.up:function"
+    created = client.post(
+        "/viewer/terminal/templates",
+        json={"name": "mixed", "functions": [{"id": fid, "deep": False}, {"id": stale_fid, "deep": True}]},
+    ).json()["template"]
+
+    _register(client)
+    pushed = {}
+
+    async def fake_push_selection(selection):
+        pushed["selection"] = selection
+        return {"armed": [s["id"] for s in selection], "unresolved": []}
+
+    monkeypatch.setattr(viewer, "_push_selection", fake_push_selection)
+    client.post(f"/viewer/terminal/templates/{created['id']}/apply")
+    # both ids were sent to HUB.selection and on to _push_selection — neither
+    # was silently dropped because it failed the local catalog check.
+    assert {s["id"] for s in viewer.HUB.selection} == {fid, stale_fid}
+    assert {s["id"] for s in pushed["selection"]} == {fid, stale_fid}
+
+
+def test_template_not_found_returns_404(client):
+    assert client.put("/viewer/terminal/templates/tpl_missing", json={"name": "x"}).status_code == 404
+    assert client.delete("/viewer/terminal/templates/tpl_missing").status_code == 404
+    assert client.post("/viewer/terminal/templates/tpl_missing/apply").status_code == 404
+
+
+def test_templates_persist_across_a_fresh_store_for_the_same_project(client, tmp_path):
+    from backend.analysis.templates import TemplateStore
+
+    fid = _real_function_id(client)
+    client.post("/viewer/terminal/templates", json={"name": "checkout", "functions": [{"id": fid, "deep": False}]})
+
+    # simulate a backend restart: a brand-new TemplateStore instance for the
+    # same project_path/cache_dir must load what was already saved to disk.
+    reloaded = TemplateStore(SAMPLE_PROJECT, tmp_path / "cache")
+    assert [t["name"] for t in reloaded.list_raw()] == ["checkout"]

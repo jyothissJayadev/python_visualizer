@@ -33,6 +33,7 @@ from typing import Any
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
+from backend.analysis.templates import TemplateStore, TemplateValidationError
 from backend.state import ExplorerState
 
 router = APIRouter()
@@ -40,6 +41,25 @@ router = APIRouter()
 
 def get_state(request: Request) -> ExplorerState:
     return request.app.state.explorer_state
+
+
+def get_template_store(request: Request) -> TemplateStore:
+    return request.app.state.template_store
+
+
+def _catalog_id_set(request: Request) -> set[str]:
+    """Every function/method id ('module:QualName') in the current source
+    scan — used only to annotate templates as ok/missing, never to gate
+    what apply() sends to brain."""
+    scan = get_state(request).scan_result
+    ids: set[str] = set()
+    for module in scan.modules:
+        for fn in module.functions:
+            ids.add(f"{module.module}:{fn.name}")
+        for cls in module.classes:
+            for method in cls.methods:
+                ids.add(f"{module.module}:{cls.name}.{method.name}")
+    return ids
 
 
 # The built React dashboard (``cd frontend && npm run build``). In dev the
@@ -208,6 +228,68 @@ async def update_terminal_selection(payload: dict):
         if s.get("id"):
             current[str(s["id"]).strip()] = bool(s.get("deep"))
     HUB.selection = [{"id": fid, "deep": deep} for fid, deep in current.items()]
+    if not HUB.brain_base_url:
+        return JSONResponse({"ok": False, "selection": HUB.selection, "armed": [], "unresolved": [], "error": "brain not registered"})
+    result = await _push_selection(HUB.selection)
+    await HUB.broadcast({"kind": "selection_applied", **result})
+    return JSONResponse({"ok": "error" not in result, "selection": HUB.selection, **result})
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Trace Templates — named, saved function groups (see backend/analysis/templates.py)
+# ─────────────────────────────────────────────────────────────────────────
+def _template_error_status(exc: TemplateValidationError) -> int:
+    return 409 if "already exists" in str(exc) else 400
+
+
+@router.get("/viewer/terminal/templates")
+async def list_terminal_templates(request: Request):
+    store = get_template_store(request)
+    return JSONResponse({"templates": store.list_annotated(_catalog_id_set(request))})
+
+
+@router.post("/viewer/terminal/templates")
+async def create_terminal_template(request: Request, payload: dict):
+    store = get_template_store(request)
+    try:
+        template = await store.create(payload.get("name"), payload.get("functions"))
+    except TemplateValidationError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=_template_error_status(exc))
+    return JSONResponse({"template": template}, status_code=201)
+
+
+@router.put("/viewer/terminal/templates/{template_id}")
+async def update_terminal_template(template_id: str, request: Request, payload: dict):
+    store = get_template_store(request)
+    try:
+        template = await store.update(template_id, name=payload.get("name"), functions=payload.get("functions"))
+    except KeyError:
+        return JSONResponse({"error": "template not found"}, status_code=404)
+    except TemplateValidationError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=_template_error_status(exc))
+    return JSONResponse({"template": template})
+
+
+@router.delete("/viewer/terminal/templates/{template_id}")
+async def delete_terminal_template(template_id: str, request: Request):
+    store = get_template_store(request)
+    if not await store.delete(template_id):
+        return JSONResponse({"error": "template not found"}, status_code=404)
+    return JSONResponse({"ok": True})
+
+
+@router.post("/viewer/terminal/templates/{template_id}/apply")
+async def apply_terminal_template(template_id: str, request: Request):
+    """Arm every function in the template with its saved deep/shallow mode.
+    Pushes all of them unconditionally — exactly like set_terminal_selection
+    and arm_functions — so brain's own resolution is the sole source of truth
+    for what's unresolved. The local catalog never gates what gets sent here,
+    it only drives the missing/rename-suggestion cosmetics in GET above."""
+    store = get_template_store(request)
+    template = store.get(template_id)
+    if template is None:
+        return JSONResponse({"error": "template not found"}, status_code=404)
+    HUB.selection = [{"id": f["id"], "deep": bool(f["deep"])} for f in template["functions"]]
     if not HUB.brain_base_url:
         return JSONResponse({"ok": False, "selection": HUB.selection, "armed": [], "unresolved": [], "error": "brain not registered"})
     result = await _push_selection(HUB.selection)

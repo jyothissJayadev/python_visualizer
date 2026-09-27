@@ -146,3 +146,80 @@ async def test_mcp_get_last_io_and_wait_for_trace():
         assert (io["input"], io["result"], io["exc"]) == ("input", "result", "exc")
         out = await wait_for_trace("calc", timeout=0.5)
         assert "no new trace" in out[0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_list_templates():
+    from backend.mcp_server import list_templates
+
+    mock_templates = {"templates": [{"id": "tpl_1", "name": "checkout", "functions": []}]}
+    with patch("backend.mcp_server._fetch_get", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = mock_templates
+        res = await list_templates()
+        assert res == mock_templates
+        mock_get.assert_called_once_with("/viewer/terminal/templates")
+
+
+@pytest.mark.asyncio
+async def test_mcp_save_template_uses_get_armed_shape_not_arm_functions_shape():
+    from backend.mcp_server import save_template
+
+    functions = [{"id": "app.checkout:process_order", "deep": True}, {"id": "app.payments:charge_card", "deep": False}]
+    with patch("backend.mcp_server._fetch_post", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = {"template": {"id": "tpl_1", "name": "checkout", "functions": functions}}
+        res = await save_template("checkout", functions)
+        assert res["id"] == "tpl_1"
+        mock_post.assert_called_once_with(
+            "/viewer/terminal/templates", {"name": "checkout", "functions": functions}
+        )
+
+
+@pytest.mark.asyncio
+async def test_mcp_apply_template():
+    from backend.mcp_server import apply_template
+
+    with patch("backend.mcp_server._fetch_post", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = {"ok": True, "armed": ["a:b"], "unresolved": []}
+        res = await apply_template("tpl_1")
+        assert res["ok"] is True
+        mock_post.assert_called_once_with("/viewer/terminal/templates/tpl_1/apply", {})
+
+
+@pytest.mark.asyncio
+async def test_mcp_update_template_omits_unset_fields():
+    from backend.mcp_server import update_template
+
+    with patch("backend.mcp_server._fetch_put", new_callable=AsyncMock) as mock_put:
+        mock_put.return_value = {"template": {"id": "tpl_1", "name": "renamed"}}
+        res = await update_template("tpl_1", name="renamed")
+        assert res["name"] == "renamed"
+        mock_put.assert_called_once_with("/viewer/terminal/templates/tpl_1", {"name": "renamed"})
+
+
+@pytest.mark.asyncio
+async def test_mcp_delete_template():
+    from backend.mcp_server import delete_template
+
+    with patch("backend.mcp_server._fetch_delete", new_callable=AsyncMock) as mock_delete:
+        mock_delete.return_value = {"ok": True}
+        res = await delete_template("tpl_1")
+        assert res["ok"] is True
+        mock_delete.assert_called_once_with("/viewer/terminal/templates/tpl_1")
+
+
+@pytest.mark.asyncio
+async def test_mcp_template_tools_surface_collector_errors():
+    import httpx
+    from backend.mcp_server import list_templates, save_template
+
+    with patch("backend.mcp_server._fetch_get", new_callable=AsyncMock) as mock_get:
+        mock_get.side_effect = httpx.ConnectError("refused")
+        assert "cannot reach" in (await list_templates())["error"]
+
+    with patch("backend.mcp_server._fetch_post", new_callable=AsyncMock) as mock_post:
+        mock_post.side_effect = httpx.HTTPStatusError(
+            "409", request=httpx.Request("POST", "http://x"),
+            response=httpx.Response(409, text='{"error":"a template named \'checkout\' already exists"}'),
+        )
+        err = (await save_template("checkout", [{"id": "a:b", "deep": False}]))["error"]
+        assert "409" in err

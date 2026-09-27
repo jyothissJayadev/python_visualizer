@@ -1,17 +1,22 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { store } from "../lib/store";
 import { useTerminal } from "../lib/useTerminal";
+import type { Template } from "../types";
 
 interface Props {
   collapsed: boolean;
   onOpenModal: () => void;
+  onEditTemplate: (template: Template) => void;
 }
 
 export function CatalogPane({
   collapsed,
   onOpenModal,
+  onEditTemplate,
 }: Props) {
   const s = useTerminal();
+  const [savingName, setSavingName] = useState("");
+  const [showSaveInput, setShowSaveInput] = useState(false);
 
   const deepCount = useMemo(
     () =>
@@ -88,7 +93,105 @@ export function CatalogPane({
         </button>
       </div>
 
+      <div className="catalog-header" style={{ borderTop: "1px solid var(--border-subtle)" }}>
+        <div className="catalog-title-row">
+          <span className="catalog-title">📋 Trace Templates</span>
+          <span className="badge badge-dim">{s.templates.length}</span>
+        </div>
 
+        {s.templates.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: showSaveInput ? 8 : 0 }}>
+            {s.templates.map((t) => {
+              const missingCount = t.functions.filter((f) => f.status === "missing").length;
+              return (
+                <div
+                  key={t.id}
+                  className="selected-fn-row"
+                  style={{ cursor: "pointer" }}
+                  title={`Apply "${t.name}" (${t.functions.length} functions)`}
+                >
+                  <div className="selected-fn-main" onClick={() => store.applyTemplate(t.id)}>
+                    <div className="selected-fn-name-row">
+                      <span className="selected-fn-name">{t.name}</span>
+                      {missingCount > 0 && (
+                        <span className="badge" style={{ fontSize: 8.5, padding: "0 4px", color: "var(--accent-red, #ff6b6b)" }}>
+                          {missingCount} missing
+                        </span>
+                      )}
+                    </div>
+                    <span className="selected-fn-pkg">{t.functions.length} function(s)</span>
+                  </div>
+                  <button className="btn-sm" style={{ fontSize: 10.5, padding: "2px 6px" }} onClick={() => onEditTemplate(t)}>
+                    ✎ Edit
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {showSaveInput ? (
+          <div style={{ display: "flex", gap: 6 }}>
+            <input
+              autoFocus
+              type="text"
+              placeholder="Template name…"
+              value={savingName}
+              onChange={(e) => setSavingName(e.target.value)}
+              onKeyDown={async (e) => {
+                if (e.key === "Enter" && savingName.trim()) {
+                  const ok = await store.saveTemplate(savingName.trim());
+                  if (ok) {
+                    setSavingName("");
+                    setShowSaveInput(false);
+                  }
+                } else if (e.key === "Escape") {
+                  setShowSaveInput(false);
+                }
+              }}
+              style={{
+                flex: 1,
+                background: "transparent",
+                border: "1px solid var(--border-subtle)",
+                borderRadius: 4,
+                padding: "4px 8px",
+                color: "inherit",
+                fontSize: 11.5,
+              }}
+            />
+            <button
+              className="btn-primary btn-sm"
+              disabled={!savingName.trim()}
+              onClick={async () => {
+                const ok = await store.saveTemplate(savingName.trim());
+                if (ok) {
+                  setSavingName("");
+                  setShowSaveInput(false);
+                }
+              }}
+            >
+              Save
+            </button>
+            <button className="btn-sm" onClick={() => setShowSaveInput(false)}>
+              ✕
+            </button>
+          </div>
+        ) : (
+          <button
+            className="btn-sm"
+            style={{ justifyContent: "center", width: "100%" }}
+            disabled={s.selectedFunctions.size === 0}
+            title={
+              s.selectedFunctions.size === 0
+                ? "Select functions above first"
+                : "Save the current selection as a reusable template"
+            }
+            onClick={() => setShowSaveInput(true)}
+          >
+            + Save current selection as template
+          </button>
+        )}
+      </div>
 
       {s.codeInSync === false && (
         <div className="code-sync-banner">

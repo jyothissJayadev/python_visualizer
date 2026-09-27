@@ -75,14 +75,15 @@ Rejected: the user explicitly wants a **stored, editable list that gets applied 
 - `POST /viewer/terminal/templates` — create from `{name, functions}`. Validation: `name` must be non-empty after trimming and unique (case-insensitive) among existing templates for this project — reject with 409 on a duplicate; `functions` must be a non-empty list of valid `{id: str, deep: bool}` entries (ids are not required to resolve against the current catalog at save time — a template can be authored for functions on a branch you haven't checked out yet).
 - `PUT /viewer/terminal/templates/{id}` — rename and/or replace the function list (this is "edit"); same validation rules as create, applied to whichever fields are supplied.
 - `DELETE /viewer/terminal/templates/{id}`.
-- `POST /viewer/terminal/templates/{id}/apply` — resolves `functions` into the `[{"id","deep"}]` shape the selection endpoints already use, and calls the same `_update_selection` / `_push_selection` path (`viewer.py:197-215, 390-398`). Functions that don't resolve against the current catalog are skipped from what gets pushed to brain and surfaced as `unresolved`, exactly like a manual `arm_functions` call with a stale id — apply never partially-fails silently, it arms what it can and reports the rest.
+- `POST /viewer/terminal/templates/{id}/apply` — resolves `functions` into the `[{"id","deep"}]` shape the selection endpoints already use, and calls the same `_update_selection` / `_push_selection` path (`viewer.py:197-215, 390-398`). **Pushes every function unconditionally, with no local-catalog pre-filter** — this matches how `arm_functions` (`mcp_server.py:130-152`) and `set_terminal_selection`/`update_terminal_selection` (`viewer.py:179-215`) already behave: every id goes to brain via `_push_selection`, and brain's own `/__telemetry__/instrument` response is the sole source of truth for `unresolved`. The local catalog is never used to gate what gets sent — only to drive the UI's missing-badge/rename-suggestion cosmetics (see GET above). This also settles what happens when zero of a template's functions currently resolve: apply still pushes them all, brain reports all of them `unresolved`, and the armed set ends up empty — the same outcome a manual `arm_functions` call with an entirely stale id list would produce today. No special-cased "refuse to apply" path.
+- All CRUD + apply handlers, plus REST and MCP entry points alike, share a single `TemplateStore` implementation (`create`, `update`, `delete`, `list_annotated`, `apply`) — REST handlers and MCP tools are both thin wrappers around it, so validation (name non-empty/unique, non-empty functions list, PUT's uniqueness check excluding the template's own current name) and catalog annotation (`ok`/`missing`/`unknown` + rename suggestions) live in exactly one place and can't drift between the two surfaces. `list_templates()` over MCP calls the same `list_annotated` method REST's `GET` uses, so it carries the identical live status/suggestion data.
 - All CRUD + apply handlers on this store acquire a single per-project `asyncio.Lock` around their read-modify-write of the templates file, so a UI edit and a concurrent MCP `save_template`/`update_template` can't race and silently drop one write.
 
-**Backend — MCP** (`backend/mcp_server.py`, sibling tools to the existing `arm_functions`):
-- `list_templates()`
-- `save_template(name, functions)` — `functions` uses the same `{"id","deep"}`-per-entry shape `get_armed()` already returns (`mcp_server.py:170-175`), **not** `arm_functions`'s input (`arm_functions(function_ids, deep=False)` applies one shared `deep` flag to a whole batch — it can't express "these 3 are deep, these 2 aren't" in one call). When the functions Claude wants to save were armed across multiple `arm_functions` calls with different `deep` values, call `get_armed()` first to recover the true per-function modes, then pass that list to `save_template`.
+**Backend — MCP** (`backend/mcp_server.py`, sibling tools to the existing `arm_functions`, all thin wrappers over `TemplateStore`):
+- `list_templates()` — returns the same live-annotated shape as `GET /viewer/terminal/templates`.
+- `save_template(name, functions)` — `functions` uses the same `{"id","deep"}`-per-entry shape `get_armed()` already returns (`mcp_server.py:170-175`), **not** `arm_functions`'s input (`arm_functions(function_ids, deep=False)` applies one shared `deep` flag to a whole batch — it can't express "these 3 are deep, these 2 aren't" in one call). When the functions Claude wants to save were armed across multiple `arm_functions` calls with different `deep` values, call `get_armed()` first to recover the true per-function modes, then pass that list to `save_template`. Enforces the identical validation `TemplateStore.create` applies to the REST path — a duplicate/empty name or empty function list returns the same error shape (`{"error": "..."}`, matching this file's existing `_explain()` convention) rather than a bespoke MCP-only rule.
 - `apply_template(id)`
-- `update_template(id, name?, functions?)`
+- `update_template(id, name?, functions?)` — same validation as REST's `PUT`, including self-exclusion on the uniqueness check.
 - `delete_template(id)`
 
 This means Claude, mid-debugging-session, can call `arm_functions([...], deep=True)`, investigate, then call `get_armed()` and pass its result to `save_template("payment bug repro", [...])` — and you (or Claude, next time) can `apply_template(...)` to jump straight back into that exact instrumentation.
@@ -125,62 +126,20 @@ Existing app, existing deployment — no separate distribution channel needed. T
    - Save a template with a mix of deep and shallow functions, apply it, and confirm each armed function's mode in `get_armed()`/the UI exactly matches what was saved (not all-deep or all-shallow).
    - Apply a template containing one deliberately-broken function id → confirm the other functions still arm and the broken one is reported as `unresolved`, not a hard failure.
    - Call the new MCP tools directly (`list_templates`, `save_template` using `get_armed()`'s output shape, `apply_template`, `update_template`, `delete_template`) to confirm Claude-side create/apply works.
+8. Unit tests for `TemplateStore` itself (not just manual/E2E): `create`/`update` validation edge cases (empty name, duplicate name, rename-to-self, empty functions list), and one concurrency test that fires an update and a save concurrently against the lock to prove a write is never silently dropped.
 
 ## What I noticed about how you think
 
 - You went straight to "a list saved somewhere, synced with live code" instead of a one-off convenience hack — and it turns out this codebase already has 80% of the infrastructure for exactly that (a JSON-cache pattern, a fuzzy-rename matcher sitting half-used in the MCP tool). You're pattern-matching to what's already there before you've even seen the code.
 - You explicitly asked for this to work "in the mcp server request for the claude as well" — you're not just building a UI convenience, you're building a shared vocabulary between you and Claude for naming "the interesting functions in this flow." That's a different way to collaborate with an agent on your own code than most people reach for.
 
-<!-- gstack:office-hours:concerns:start -->
-## Reviewer Concerns
+## GSTACK REVIEW REPORT
 
-Disposition: CONCERNS_RECORDED
+| Review | Trigger | Why | Runs | Status | Findings |
+|---|---|---|---|---|---|
+| /office-hours spec review | design doc drafted | catch gaps before eng review | 2 | CONVERGENCE (8/10) | 12 found, 7 fixed, 4 open → resolved below |
+| /plan-eng-review | pre-implementation | lock architecture/tests before code | 1 | COMPLETE | 1 architecture (P1), 3 code-quality (resolved into shared `TemplateStore`), 2 test gaps added |
 
-Stop: CONVERGENCE
+**VERDICT:** APPROVED — all office-hours Reviewer Concerns (R2-1 through R2-4) and one new architecture finding (apply must push unconditionally, not pre-filter against the local catalog — see Recommended Approach) are now resolved directly in this document. No outside-model pass was run (Codex unavailable in this environment; native review only).
 
-### R2-1 — completeness
-
-**Problem**
-
-> Apply behavior unspecified when zero functions resolve — could silently clear the live arm-set with nothing re-armed.
-
-**Remedy**
-
-> State whether an all-unresolved apply still replaces with empty, and how that's surfaced, vs. refusing and leaving existing armed set untouched.
-
-### R2-2 — completeness
-
-**Problem**
-
-> Validation rules stated only for REST create/update; MCP save_template/update_template don't mention enforcing the same rules.
-
-**Remedy**
-
-> State save_template/update_template enforce identical validation via the same TemplateStore logic, and specify the error shape on validation failure.
-
-### R2-3 — completeness
-
-**Problem**
-
-> PUT's name-uniqueness check doesn't say whether it excludes the template's own current name, so a no-op rename or case-only correction could be wrongly rejected.
-
-**Remedy**
-
-> State the uniqueness check on PUT excludes the template being edited.
-
-### R2-4 — clarity
-
-**Problem**
-
-> Unclear whether MCP list_templates() returns the same live ok/missing/suggestion annotations as REST GET, leaving no stated way for Claude to detect staleness via MCP alone.
-
-**Remedy**
-
-> State list_templates() includes the same live annotation as REST GET.
-
-### Prior finding evidence
-
-**R1-6 → R2-2 (persisting)**
-
-> validation only stated for REST, not MCP
-<!-- gstack:office-hours:concerns:end -->
+NO UNRESOLVED DECISIONS

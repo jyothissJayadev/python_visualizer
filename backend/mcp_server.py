@@ -56,6 +56,20 @@ async def _fetch_post(path: str, json_data: dict, timeout: float = 30.0) -> Any:
         return resp.json()
 
 
+async def _fetch_put(path: str, json_data: dict, timeout: float = 30.0) -> Any:
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.put(f"{COLLECTOR_URL}{path}", json=json_data)
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def _fetch_delete(path: str, timeout: float = 30.0) -> Any:
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.delete(f"{COLLECTOR_URL}{path}")
+        resp.raise_for_status()
+        return resp.json()
+
+
 @mcp.tool()
 async def get_status() -> dict[str, Any]:
     """Get the current status of the Brain Terminal collector, connected brain instance,
@@ -171,6 +185,77 @@ async def get_armed() -> dict[str, Any]:
     """List the currently armed functions ({id, deep}) and whether brain is connected."""
     try:
         return await _fetch_get("/viewer/terminal/selection")
+    except Exception as exc:  # noqa: BLE001
+        return {"error": _explain(exc)}
+
+
+@mcp.tool()
+async def list_templates() -> dict[str, Any]:
+    """List saved Trace Templates — named, reusable groups of functions to arm
+    together. Each function is annotated with its live status against the
+    current source scan ('ok', 'missing', or 'unknown' before the first scan)
+    plus up to 3 rename suggestions when missing. This annotation is
+    informational only — apply_template always arms every saved function."""
+    try:
+        return await _fetch_get("/viewer/terminal/templates")
+    except Exception as exc:  # noqa: BLE001
+        return {"error": _explain(exc)}
+
+
+@mcp.tool()
+async def save_template(name: str, functions: list[dict[str, Any]]) -> dict[str, Any]:
+    """Save a named Trace Template so this exact set of functions can be re-armed later in one call.
+
+    Args:
+        name: Template name — must be non-empty and unique among existing templates.
+        functions: [{"id": "module.path:QualName", "deep": bool}, ...] — the same
+                   per-function shape `get_armed()` returns. This is NOT the same
+                   shape `arm_functions` takes (that applies one shared `deep` flag
+                   to a whole batch, and can't express mixed modes). If the
+                   functions you want to save were armed across multiple
+                   `arm_functions` calls with different `deep` values, call
+                   `get_armed()` first to recover the true per-function modes,
+                   then pass that list here.
+    """
+    try:
+        data = await _fetch_post("/viewer/terminal/templates", {"name": name, "functions": functions})
+        return data.get("template", data)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": _explain(exc)}
+
+
+@mcp.tool()
+async def apply_template(template_id: str) -> dict[str, Any]:
+    """Arm every function saved in a Trace Template with its saved deep/shallow
+    mode. Replaces the currently armed set, same as applying a manual selection."""
+    try:
+        return await _fetch_post(f"/viewer/terminal/templates/{template_id}/apply", {})
+    except Exception as exc:  # noqa: BLE001
+        return {"error": _explain(exc)}
+
+
+@mcp.tool()
+async def update_template(
+    template_id: str, name: str | None = None, functions: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """Rename a Trace Template and/or replace its function list. Omit a field to leave it unchanged."""
+    payload: dict[str, Any] = {}
+    if name is not None:
+        payload["name"] = name
+    if functions is not None:
+        payload["functions"] = functions
+    try:
+        data = await _fetch_put(f"/viewer/terminal/templates/{template_id}", payload)
+        return data.get("template", data)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": _explain(exc)}
+
+
+@mcp.tool()
+async def delete_template(template_id: str) -> dict[str, Any]:
+    """Delete a saved Trace Template."""
+    try:
+        return await _fetch_delete(f"/viewer/terminal/templates/{template_id}")
     except Exception as exc:  # noqa: BLE001
         return {"error": _explain(exc)}
 

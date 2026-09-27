@@ -136,6 +136,23 @@ export interface Catalog {
   groups: CatalogGroup[];
 }
 
+/* ---- trace templates ---- */
+
+export interface TemplateFunction {
+  id: string; // "module:QualName"
+  deep: boolean;
+  status?: "ok" | "missing" | "unknown"; // annotated live by the backend against the current catalog; display-only
+  suggestions?: string[]; // up to 3 close-match ids when status is "missing"
+}
+
+export interface Template {
+  id: string;
+  name: string;
+  functions: TemplateFunction[];
+  created_at: string;
+  updated_at: string;
+}
+
 /* ---- derived, in-memory ---- */
 
 export interface SpanData {

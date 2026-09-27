@@ -17,6 +17,7 @@ import type {
   RequestData,
   SelectionAppliedMessage,
   SpanData,
+  Template,
   TraceEvent,
   ValueMessage,
 } from "../types";
@@ -66,6 +67,7 @@ export interface Snapshot {
   selectionDirty: boolean;
   catalogSearchQuery: string;
   collapsedPackages: Set<string>;
+  templates: Template[];
 
   loopFold: boolean;
   selectedOnly: boolean;
@@ -125,6 +127,7 @@ export class TerminalStore {
   private unresolvedIds = new Set<string>();
   private catalogSearchQuery = "";
   private collapsedPackages = new Set<string>(); // holds "OPEN:<pkg>" once expanded
+  private templates: Template[] = [];
 
   private loopFold = true;
   private selectedOnly = true;
@@ -398,6 +401,100 @@ export class TerminalStore {
     if (this.collapsedPackages.has(key)) this.collapsedPackages.delete(key);
     else this.collapsedPackages.add(key);
     this.emitNow();
+  }
+
+  /* ---------------------------------------------------------------- templates */
+
+  async loadTemplates() {
+    try {
+      const resp = await fetch("/viewer/terminal/templates");
+      if (resp.ok) {
+        const data = await resp.json();
+        this.templates = data.templates || [];
+      }
+    } catch (e) {
+      console.warn("Could not load templates:", e);
+    }
+    this.emitNow();
+  }
+
+  private async submitTemplate(
+    method: "POST" | "PUT",
+    url: string,
+    body: unknown,
+    successMsg: string,
+  ): Promise<boolean> {
+    try {
+      const resp = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        this.pushToast(`Couldn't save template: ${data.error || resp.statusText}`);
+        return false;
+      }
+      await this.loadTemplates();
+      this.pushToast(successMsg);
+      return true;
+    } catch {
+      this.pushToast("Couldn't save template: network error");
+      return false;
+    }
+  }
+
+  /** Save the current (not-yet-applied) selection as a named template. */
+  saveTemplate(name: string): Promise<boolean> {
+    const functions = this.buildSelectionPayload(this.selectedFunctions);
+    return this.submitTemplate(
+      "POST",
+      "/viewer/terminal/templates",
+      { name, functions },
+      `Saved template "${name}"`,
+    );
+  }
+
+  /** Rename a template and/or replace its function list. Omit a field to leave it unchanged. */
+  updateTemplate(
+    id: string,
+    changes: { name?: string; functions?: { id: string; deep: boolean }[] },
+  ): Promise<boolean> {
+    return this.submitTemplate(
+      "PUT",
+      `/viewer/terminal/templates/${encodeURIComponent(id)}`,
+      changes,
+      "Template updated",
+    );
+  }
+
+  async deleteTemplate(id: string) {
+    try {
+      const resp = await fetch(`/viewer/terminal/templates/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        this.pushToast(`Couldn't delete template: ${data.error || resp.statusText}`);
+        return;
+      }
+      await this.loadTemplates();
+    } catch {
+      this.pushToast("Couldn't delete template: network error");
+    }
+  }
+
+  /** Arm every function in the template with its saved deep/shallow mode,
+      replacing the current selection — reuses the existing apply pipeline
+      (websocket op + selection_applied handling) rather than a separate path. */
+  applyTemplate(id: string) {
+    const template = this.templates.find((t) => t.id === id);
+    if (!template) return;
+    this.selectedFunctions = new Set(template.functions.map((f) => f.id));
+    this.functionModes = new Map(
+      template.functions.filter((f) => f.deep).map((f) => [f.id, "deep" as const]),
+    );
+    this.applySelection();
   }
 
   private persistSelection() {
@@ -880,6 +977,7 @@ export class TerminalStore {
       selectionDirty: cur !== applied,
       catalogSearchQuery: this.catalogSearchQuery,
       collapsedPackages: new Set(this.collapsedPackages),
+      templates: this.templates,
       loopFold: this.loopFold,
       selectedOnly: this.selectedOnly,
       paused: this.paused,
