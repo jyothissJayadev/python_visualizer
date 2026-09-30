@@ -1,10 +1,23 @@
 {
   "mcpServers": {
-    "brain-telemetry": {
+    "brain-telemetry-atomics": {
       "command": ".venv/bin/python",
-      "args": ["-m", "backend.mcp_server"],
+      "args": [
+        "-m",
+        "backend.mcp_server"
+      ],
       "env": {
         "BRAIN_COLLECTOR_URL": "http://127.0.0.1:8011"
+      }
+    },
+    "brain-telemetry-arthur": {
+      "command": ".venv/bin/python",
+      "args": [
+        "-m",
+        "backend.mcp_server"
+      ],
+      "env": {
+        "BRAIN_COLLECTOR_URL": "http://127.0.0.1:8012"
       }
     }
   }

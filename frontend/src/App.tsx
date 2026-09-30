@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { store } from "./lib/store";
 import { startSocket } from "./lib/socket";
 import { useAppRouter } from "./lib/router";
+import { loadInstance, useInstance } from "./lib/instance";
+import { InstanceBadge } from "./components/InstanceBadge";
 import { Toolbar } from "./components/Toolbar";
 import { CatalogPane } from "./components/CatalogPane";
 import { CatalogModal } from "./components/CatalogModal";
@@ -23,6 +25,7 @@ import "./lineage.css";
 
 export default function App() {
   const { tab, endpointId, tableId, lineageId, focusConnected, navigate } = useAppRouter();
+  const { features } = useInstance();
   const [catalogCollapsed, setCatalogCollapsed] = useState(false);
   const [routesSidebarCollapsed, setRoutesSidebarCollapsed] = useState(false);
   const [databaseSidebarCollapsed, setDatabaseSidebarCollapsed] = useState(false);
@@ -36,12 +39,19 @@ export default function App() {
 
   useEffect(() => {
     startSocket();
+    void loadInstance();
     void store.loadCatalog();
     void store.loadTemplates();
   }, []);
 
+  // an instance may not offer the tab in the URL (e.g. #/database on a target without a database)
+  useEffect(() => {
+    if (tab !== "terminal" && !features.includes(tab)) navigate("terminal");
+  }, [tab, features, navigate]);
+
   return (
     <div id="app">
+      <InstanceBadge />
       <Toolbar
         catalogCollapsed={catalogCollapsed}
         onToggleCatalog={() => setCatalogCollapsed((v) => !v)}

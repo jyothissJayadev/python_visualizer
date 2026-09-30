@@ -8,7 +8,7 @@ import { defineConfig } from 'vite'
 // BRAIN_TERMINAL_BACKEND_PORT; standalone `npm run dev` falls back to 8011.
 // https://vite.dev/config/
 const BACKEND_PORT = process.env.BRAIN_TERMINAL_BACKEND_PORT ?? '8011'
-const FRONTEND_PORT = 5177
+const FRONTEND_PORT = Number(process.env.VIZ_FRONTEND_PORT ?? 5177)
 
 export default defineConfig(({ command }) => ({
   base: command === 'build' ? '/viewer/terminal/' : '/',

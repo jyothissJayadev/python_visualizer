@@ -144,6 +144,22 @@ def test_events_broadcast_and_tail_replays(client):
     assert live["kind"] == "fn.start"
 
 
+def test_replay_includes_the_start_of_a_large_request(client):
+    """A dashboard that connects after a big request must still get the request's first events
+    (they used to be cut off by a fixed 800-event replay tail)."""
+    n = 2500
+    events = [{"kind": "request.start", "request_id": "big", "seq": 0, "data": {"method": "POST", "path": "/big"}}]
+    events += [{"kind": "fn.start", "request_id": "big", "span_id": f"s{i}", "seq": i + 1,
+                "data": {"name": "m:f", "args": {}}} for i in range(n)]
+    for i in range(0, len(events), 500):
+        client.post("/viewer/terminal/ingest", json={"kind": "events", "events": events[i:i + 500]})
+    with client.websocket_connect("/viewer/terminal/ws") as ws:
+        assert ws.receive_json()["kind"] == "code_status"
+        replayed = [ws.receive_json() for _ in range(len(events))]
+    assert replayed[0]["kind"] == "request.start" and replayed[0]["request_id"] == "big"
+    assert len(replayed) == n + 1
+
+
 def test_clear_op_drops_buffer_and_broadcasts(client):
     client.post(
         "/viewer/terminal/ingest",

@@ -73,7 +73,7 @@ _NON_SOURCE_ROOTS = {"tests", "test", "scripts", "migrations", "alembic", "docs"
 
 
 class TelemetryHub:
-    def __init__(self, tail: int = 4000) -> None:
+    def __init__(self, tail: int = 12000) -> None:
         self.clients: set[WebSocket] = set()
         self.recent: deque[dict] = deque(maxlen=tail)
         self.brain_base_url: str | None = None
@@ -427,7 +427,9 @@ async def websocket_terminal_endpoint(websocket: WebSocket):
     await websocket.accept()
     HUB.clients.add(websocket)
     await HUB.send_one(websocket, _code_status_message())
-    for event in list(HUB.recent)[-800:]:
+    # replay everything buffered: a large request's start/root spans are its oldest events, and
+    # a fixed short tail would cut exactly those off
+    for event in list(HUB.recent):
         await HUB.send_one(websocket, event)
 
     try:

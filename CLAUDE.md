@@ -3,7 +3,7 @@
 ## Overview
 This repository contains **Brain Terminal** (`python-backend-explorer`), a live telemetry, AST function scanner, and runtime I/O inspector for Python backends.
 
-When writing, debugging, or modifying code in this codebase or the target backend, you have access to the **`brain-telemetry` MCP tools** to inspect real runtime behavior.
+When writing, debugging, or modifying code in this codebase or the target backend, you have access to the **`brain-telemetry-*` MCP tools** to inspect real runtime behavior. There is one MCP server per visualizer instance (see `instances.json`): use `brain-telemetry-atomics` (collector :8011) for the atomics `brain` service and `brain-telemetry-arthur` (collector :8012) for Arthur. Tool names are namespaced by server, e.g. `mcp__brain-telemetry-arthur__arm_functions`.
 
 ---
 
@@ -37,21 +37,29 @@ When writing, debugging, or modifying code in this codebase or the target backen
 ---
 
 ## ⚙️ Setup & Registration
-To register this MCP server with Claude Code:
+Each MCP server talks to one collector, selected by `BRAIN_COLLECTOR_URL`. Register one per instance:
 ```bash
-claude mcp add brain-telemetry python -m backend.mcp_server
+claude mcp add brain-telemetry-atomics -e BRAIN_COLLECTOR_URL=http://127.0.0.1:8011 -- .venv/bin/python -m backend.mcp_server
+claude mcp add brain-telemetry-arthur  -e BRAIN_COLLECTOR_URL=http://127.0.0.1:8012 -- .venv/bin/python -m backend.mcp_server
 ```
-or ensure `.mcp.json` exists in the repository root:
+or ensure `.mcp.json` exists in the repository root (it ships this way):
 ```json
 {
   "mcpServers": {
-    "brain-telemetry": {
-      "command": "python",
-      "args": ["-m", "backend.mcp_server"]
+    "brain-telemetry-atomics": {
+      "command": ".venv/bin/python",
+      "args": ["-m", "backend.mcp_server"],
+      "env": { "BRAIN_COLLECTOR_URL": "http://127.0.0.1:8011" }
+    },
+    "brain-telemetry-arthur": {
+      "command": ".venv/bin/python",
+      "args": ["-m", "backend.mcp_server"],
+      "env": { "BRAIN_COLLECTOR_URL": "http://127.0.0.1:8012" }
     }
   }
 }
 ```
+Start the instances with `python -m backend.dev --instance atomics --instance arthur` (see README → Instances).
 
 ## Skill routing
 

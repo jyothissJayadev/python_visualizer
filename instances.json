@@ -1,0 +1,20 @@
+{
+  "instances": [
+    {
+      "name": "atomics",
+      "project": "/run/media/jyothiss/main/code/atomics_estimate_engine/apps/brain",
+      "backend_port": 8011,
+      "frontend_port": 5177,
+      "target_url": "http://127.0.0.1:8000",
+      "features": ["terminal", "routes", "database", "lineage"]
+    },
+    {
+      "name": "arthur",
+      "project": "/run/media/jyothiss/main/learn/Arthur/version_1.1/backend",
+      "backend_port": 8012,
+      "frontend_port": 5178,
+      "target_url": "http://127.0.0.1:8080",
+      "features": ["terminal", "routes"]
+    }
+  ]
+}

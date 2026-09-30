@@ -11,3 +11,5 @@ frontend/dist/
 
 # analysis cache (backend/analysis/service.py)
 .cache/
+
+*.egg-info/

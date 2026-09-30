@@ -1,0 +1,14 @@
+.instance-badge {
+  position: fixed;
+  right: 10px;
+  bottom: 8px;
+  z-index: 50;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font: 600 11px/1.6 ui-monospace, monospace;
+  letter-spacing: 0.04em;
+  background: rgba(60, 120, 255, 0.16);
+  color: #8fb4ff;
+  border: 1px solid rgba(60, 120, 255, 0.4);
+  pointer-events: auto;
+}

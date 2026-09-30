@@ -13,7 +13,7 @@ import os
 
 import uvicorn
 
-from backend.config import DEFAULT_IGNORED_DIRECTORIES, ExplorerConfig, project_path_problem
+from backend.config import ALL_FEATURES, DEFAULT_IGNORED_DIRECTORIES, ExplorerConfig, project_path_problem
 
 
 def parse_args(argv: list[str] | None = None) -> ExplorerConfig:
@@ -28,7 +28,17 @@ def parse_args(argv: list[str] | None = None) -> ExplorerConfig:
         metavar="DIR_NAME",
         help="Additional directory name to ignore while scanning (repeatable)",
     )
+    parser.add_argument("--name", default="default", help="Instance name shown in the dashboard")
+    parser.add_argument(
+        "--features",
+        default=",".join(ALL_FEATURES),
+        help=f"Comma-separated dashboard features to enable (default: all of {', '.join(ALL_FEATURES)})",
+    )
     args = parser.parse_args(argv)
+    features = tuple(f for f in args.features.split(",") if f)
+    bad = [f for f in features if f not in ALL_FEATURES]
+    if bad or "terminal" not in features:
+        parser.error(f"--features must include 'terminal' and only use {list(ALL_FEATURES)}; got {args.features!r}")
     problem = project_path_problem(os.path.abspath(args.project))
     if problem:
         parser.error(problem)
@@ -39,6 +49,8 @@ def parse_args(argv: list[str] | None = None) -> ExplorerConfig:
         host=args.host,
         port=args.port,
         ignored_directories=ignored,
+        name=args.name,
+        features=features,
     )
 
 
@@ -49,6 +61,8 @@ def main(argv: list[str] | None = None) -> None:
     os.environ["BRAIN_TERMINAL_PROJECT"] = config.project_path
     os.environ["BRAIN_TERMINAL_HOST"] = config.host
     os.environ["BRAIN_TERMINAL_PORT"] = str(config.port)
+    os.environ["VIZ_INSTANCE_NAME"] = config.name
+    os.environ["VIZ_FEATURES"] = ",".join(config.features)
     os.environ["BRAIN_TERMINAL_IGNORE"] = os.pathsep.join(
         sorted(config.ignored_directories - DEFAULT_IGNORED_DIRECTORIES)
     )

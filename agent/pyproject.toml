@@ -1,0 +1,13 @@
+[project]
+name = "visualizer-agent"
+version = "0.1.0"
+description = "Target-side agent for the Brain Terminal visualizer: arms functions with sys.monitoring, records their inputs/outputs per HTTP request and streams them to a visualizer instance."
+requires-python = ">=3.12"
+dependencies = ["fastapi", "httpx>=0.27.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["visualizer_agent"]

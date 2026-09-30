@@ -12,10 +12,12 @@ from backend.analysis.lineage import LineageService
 from backend.analysis.service import CACHE_DIR, AnalysisService
 from backend.analysis.templates import TemplateStore
 from backend.api import viewer
+from backend.api.instance import router as instance_router
 from backend.api.lineage import router as lineage_router
 from backend.api.routes import router as routes_router
 from backend.api.viewer import router as viewer_router
-from backend.config import DEFAULT_IGNORED_DIRECTORIES, ExplorerConfig
+from backend.config import ALL_FEATURES, DEFAULT_IGNORED_DIRECTORIES, ExplorerConfig
+from backend.instances import project_key
 from backend.state import ExplorerState
 
 # Vite's dev server picks the next free port when 5173 is taken, so match
@@ -44,12 +46,14 @@ def create_app(
         app.state.analysis_service = service
         lineage = LineageService(
             config.project_path,
-            cache_file=(Path(cache_dir) / "lineage_cache.json") if cache_dir is not None else None,
+            cache_file=(Path(cache_dir) / f"lineage-{project_key(config.project_path)}.json")
+            if cache_dir is not None
+            else None,
         )
         app.state.lineage_service = lineage
         if analyze_on_start:
             await service.start(watch=watch)
-            if watch:  # the lineage scanner runs `node` and reads the sibling apps: only with the file watcher
+            if watch and "lineage" in config.features:  # runs `node`, reads sibling apps: opt-in per instance
                 await lineage.start(broadcast=lambda msg: viewer.HUB.broadcast(msg))
         try:
             yield
@@ -66,6 +70,8 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.state.config = config
+    app.include_router(instance_router)
     app.include_router(viewer_router)
     app.include_router(routes_router)
     app.include_router(lineage_router)
@@ -82,5 +88,7 @@ def make_app() -> FastAPI:
         host=os.environ.get("BRAIN_TERMINAL_HOST", "127.0.0.1"),
         port=int(os.environ.get("BRAIN_TERMINAL_PORT", "8765")),
         ignored_directories=frozenset(DEFAULT_IGNORED_DIRECTORIES | set(extra)),
+        name=os.environ.get("VIZ_INSTANCE_NAME", "default"),
+        features=tuple(f for f in os.environ.get("VIZ_FEATURES", "").split(",") if f) or ALL_FEATURES,
     )
     return create_app(config)

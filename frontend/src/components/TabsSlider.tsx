@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import type { AppTab } from "../lib/router";
+import { useInstance } from "../lib/instance";
 
 interface Props {
   activeTab: AppTab;
@@ -18,6 +19,7 @@ export function TabsSlider({
   lineageCount = 0,
   totalEvents = 0,
 }: Props) {
+  const { features } = useInstance();
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalBtnRef = useRef<HTMLButtonElement>(null);
   const routesBtnRef = useRef<HTMLButtonElement>(null);
@@ -125,6 +127,7 @@ export function TabsSlider({
         )}
       </button>
 
+      {features.includes("routes") && (
       <button
         ref={routesBtnRef}
         type="button"
@@ -154,7 +157,9 @@ export function TabsSlider({
           {routesCount > 0 ? routesCount : "Flows"}
         </span>
       </button>
+      )}
 
+      {features.includes("database") && (
       <button
         ref={databaseBtnRef}
         type="button"
@@ -182,7 +187,9 @@ export function TabsSlider({
           {databaseCount > 0 ? databaseCount : "Schema"}
         </span>
       </button>
+      )}
 
+      {features.includes("lineage") && (
       <button
         ref={lineageBtnRef}
         type="button"
@@ -212,6 +219,7 @@ export function TabsSlider({
           {lineageCount > 0 ? lineageCount : "E2E"}
         </span>
       </button>
+      )}
     </div>
   );
 }

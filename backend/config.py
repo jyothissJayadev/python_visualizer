@@ -33,12 +33,19 @@ def project_path_problem(path: str) -> str | None:
     return None
 
 
+ALL_FEATURES: tuple[str, ...] = ("terminal", "routes", "database", "lineage")
+
+
 @dataclass(frozen=True)
 class ExplorerConfig:
     project_path: str
     host: str = "127.0.0.1"
     port: int = 8765
     ignored_directories: frozenset[str] = field(default_factory=lambda: DEFAULT_IGNORED_DIRECTORIES)
+    name: str = "default"
+    """Instance name shown in the UI (see backend/instances.py)."""
+    features: tuple[str, ...] = ALL_FEATURES
+    """Which dashboard tabs this instance offers; 'lineage' also gates the lineage scanner."""
 
     def should_ignore_dir(self, dir_name: str) -> bool:
         if dir_name.startswith("."):
