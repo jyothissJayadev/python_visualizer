@@ -25,6 +25,7 @@ export function TabsSlider({
   const routesBtnRef = useRef<HTMLButtonElement>(null);
   const databaseBtnRef = useRef<HTMLButtonElement>(null);
   const lineageBtnRef = useRef<HTMLButtonElement>(null);
+  const mapBtnRef = useRef<HTMLButtonElement>(null);
 
   const [indicatorStyle, setIndicatorStyle] = useState<{
     left: number;
@@ -48,6 +49,8 @@ export function TabsSlider({
         activeBtn = databaseBtnRef.current;
       } else if (activeTab === "lineage") {
         activeBtn = lineageBtnRef.current;
+      } else if (activeTab === "map") {
+        activeBtn = mapBtnRef.current;
       }
 
       const container = containerRef.current;
@@ -77,6 +80,7 @@ export function TabsSlider({
       if (routesBtnRef.current) observer.observe(routesBtnRef.current);
       if (databaseBtnRef.current) observer.observe(databaseBtnRef.current);
       if (lineageBtnRef.current) observer.observe(lineageBtnRef.current);
+      if (mapBtnRef.current) observer.observe(mapBtnRef.current);
       return () => observer.disconnect();
     }
   }, [activeTab, routesCount, databaseCount, lineageCount, totalEvents]);
@@ -218,6 +222,24 @@ export function TabsSlider({
         <span className="tab-badge lineage-count-badge">
           {lineageCount > 0 ? lineageCount : "E2E"}
         </span>
+      </button>
+      )}
+      {features.includes("map") && (
+      <button
+        ref={mapBtnRef}
+        type="button"
+        role="tab"
+        aria-selected={activeTab === "map"}
+        className={`tabs-slider-btn ${activeTab === "map" ? "active active-map" : ""}`}
+        onClick={() => onSelectTab("map")}
+        title="Project map: entry points, main functions and their algorithms, zoomable"
+      >
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="tab-icon">
+          <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6" />
+          <line x1="8" y1="2" x2="8" y2="18" />
+          <line x1="16" y1="6" x2="16" y2="22" />
+        </svg>
+        <span className="tab-label">Map</span>
       </button>
       )}
     </div>

@@ -13,7 +13,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-ALL_FEATURES: tuple[str, ...] = ("terminal", "routes", "database", "lineage")
+ALL_FEATURES: tuple[str, ...] = ("terminal", "routes", "database", "lineage", "map")
 DEFAULT_INSTANCES_FILE = Path(__file__).resolve().parent.parent / "instances.json"
 
 

@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 
-export type Feature = "terminal" | "routes" | "database" | "lineage";
+export type Feature = "terminal" | "routes" | "database" | "lineage" | "map";
 
 export interface InstanceInfo {
   name: string;
@@ -10,7 +10,7 @@ export interface InstanceInfo {
   loaded: boolean;
 }
 
-const ALL: Feature[] = ["terminal", "routes", "database", "lineage"];
+const ALL: Feature[] = ["terminal", "routes", "database", "lineage", "map"];
 
 // Until the backend answers, show every tab (so an older backend without /viewer/instance
 // behaves exactly as before).

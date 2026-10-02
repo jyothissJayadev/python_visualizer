@@ -33,7 +33,7 @@ def project_path_problem(path: str) -> str | None:
     return None
 
 
-ALL_FEATURES: tuple[str, ...] = ("terminal", "routes", "database", "lineage")
+ALL_FEATURES: tuple[str, ...] = ("terminal", "routes", "database", "lineage", "map")
 
 
 @dataclass(frozen=True)
