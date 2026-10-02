@@ -333,6 +333,84 @@ async def get_recent_traces(
 
 
 @mcp.tool()
+async def get_map(module: str = "") -> dict[str, Any]:
+    """The project map: entry points, endpoints, main functions per module and the links between them.
+    Small helpers are folded into the main function that calls them (see `children`). Start here to
+    understand the project's shape before changing it.
+
+    Args:
+        module: Optional module name (e.g. 'app.services') to list only that module's main functions.
+    """
+    try:
+        m = await _fetch_get("/viewer/map")
+        fns = m["functions"]
+
+        def brief(fid: str) -> dict[str, Any]:
+            f = fns[fid]
+            return {
+                "id": fid, "doc": f.get("doc"), "line": f["line"], "endpoints": f["endpoints"],
+                "io": f["metrics"]["io"], "helpers": f.get("children", []),
+            }
+
+        mods = [x for x in m["modules"] if not module or x["module"] == module]
+        return {
+            "stats": m["stats"],
+            "entry_points": m["entry_points"],
+            "modules": [{"module": x["module"], "layer": x["layer"], "functions": [brief(f) for f in x["functions"]]} for x in mods],
+            "links": [f"{e['from']} -> {e['to']}" for e in m["edges"] if not module or fns[e["from"]]["module"] == module or fns[e["to"]]["module"] == module],
+            "unreached": m["unreached"][:50],
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"Failed to get map: {_explain(exc)}"}
+
+
+@mcp.tool()
+async def get_algorithm(function_id: str) -> dict[str, Any]:
+    """Algorithm card of one function: facts (signature, raises, returns), an ordered list of steps
+    (calls, decisions, loops, raises, returns) with stable ids, and a purpose line. Steps and facts come
+    from the code and cannot be changed; `fill_status` says whether the wording was agent-written."""
+    try:
+        return await _fetch_get("/viewer/map/algorithm", params={"id": function_id})
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"Failed to get algorithm: {_explain(exc)}"}
+
+
+@mcp.tool()
+async def write_algorithm(function_id: str, purpose: str, steps: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
+    """Write the wording of a function's algorithm card. You fill in blanks only: a one-line `purpose`
+    and, per existing step id, a `label` (short plain-English name) and/or a `note` (why it happens).
+    You cannot add, remove or reorder steps; unknown step ids are rejected. Call get_algorithm first.
+
+    Args:
+        function_id: 'module.path:QualName'.
+        purpose: What the function achieves, in one or two sentences (max 240 chars).
+        steps: {step_id: {"label": "...", "note": "..."}} for the steps worth explaining (max 120 / 240 chars).
+    """
+    try:
+        card = await _fetch_get("/viewer/map/algorithm", params={"id": function_id})
+        fill = {"function_id": function_id, "body_hash": card["body_hash"], "purpose": purpose, "steps": steps or {}}
+        return await _fetch_put("/viewer/map/algorithm", {"fill": fill})
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 422:
+            return {"error": "fill rejected", "problems": exc.response.json().get("detail", {}).get("problems")}
+        return {"error": f"Failed to write algorithm: {_explain(exc)}"}
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"Failed to write algorithm: {_explain(exc)}"}
+
+
+@mcp.tool()
+async def pin_function(function_id: str, role: str = "") -> dict[str, Any]:
+    """Pin a function as 'main' (shown on the map) or 'child' (folded into its callers). Empty role resets
+    it to the automatic score."""
+    if role not in ("", "main", "child"):
+        return {"error": "role must be 'main', 'child' or ''"}
+    try:
+        return await _fetch_put("/viewer/map/overrides", {"id": function_id, "role": role or None})
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"Failed to pin: {_explain(exc)}"}
+
+
+@mcp.tool()
 async def get_function_io(request_id: str, span_id: str, field: str = "result") -> dict[str, Any]:
     """Fetch untruncated runtime input arguments, return value, or exception traceback for a specific span.
 

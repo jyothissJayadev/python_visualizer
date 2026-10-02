@@ -223,3 +223,41 @@ async def test_mcp_template_tools_surface_collector_errors():
         )
         err = (await save_template("checkout", [{"id": "a:b", "deep": False}]))["error"]
         assert "409" in err
+
+
+@pytest.mark.asyncio
+async def test_mcp_write_algorithm_sends_current_body_hash():
+    from backend.mcp_server import write_algorithm
+
+    card = {"body_hash": "abc123"}
+    with patch("backend.mcp_server._fetch_get", new_callable=AsyncMock) as mock_get, patch(
+        "backend.mcp_server._fetch_put", new_callable=AsyncMock
+    ) as mock_put:
+        mock_get.return_value = card
+        mock_put.return_value = {"ok": True}
+        res = await write_algorithm("app.s:f", "Does a thing.", {"0": {"label": "Check input"}})
+        assert res == {"ok": True}
+        mock_get.assert_called_once_with("/viewer/map/algorithm", params={"id": "app.s:f"})
+        sent = mock_put.call_args.args[1]["fill"]
+        assert sent == {"function_id": "app.s:f", "body_hash": "abc123", "purpose": "Does a thing.",
+                        "steps": {"0": {"label": "Check input"}}}
+
+
+@pytest.mark.asyncio
+async def test_mcp_get_map_is_compact_and_filters_by_module():
+    from backend.mcp_server import get_map
+
+    fn = lambda mod, name, deps=(): {  # noqa: E731
+        "doc": None, "line": 1, "endpoints": [], "metrics": {"io": []}, "children": list(deps), "module": mod, "name": name,
+    }
+    full = {
+        "stats": {"main": 2}, "entry_points": [], "unreached": [],
+        "functions": {"a.x:f": fn("a.x", "f"), "b.y:g": fn("b.y", "g")},
+        "modules": [{"module": "a.x", "layer": "api", "functions": ["a.x:f"]}, {"module": "b.y", "layer": "core", "functions": ["b.y:g"]}],
+        "edges": [{"from": "a.x:f", "to": "b.y:g"}],
+    }
+    with patch("backend.mcp_server._fetch_get", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = full
+        res = await get_map(module="b.y")
+        assert [m["module"] for m in res["modules"]] == ["b.y"]
+        assert res["links"] == ["a.x:f -> b.y:g"]
