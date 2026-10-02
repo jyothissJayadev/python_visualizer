@@ -22,6 +22,8 @@ import { LineageWorkspace } from "./components/lineage/LineageWorkspace";
 import { lineageStore } from "./lib/lineageStore";
 import { useLineageValue } from "./lib/useLineage";
 import "./lineage.css";
+import { MapView } from "./components/map/MapView";
+import "./map.css";
 
 export default function App() {
   const { tab, endpointId, tableId, lineageId, focusConnected, navigate } = useAppRouter();
@@ -69,6 +71,8 @@ export default function App() {
             navigate("database", databaseStore.getSnapshot().selectedTableId ?? undefined);
           } else if (t === "lineage") {
             navigate("lineage", lineageStore.getSnapshot().selectedChainId ?? undefined);
+          } else if (t === "map") {
+            navigate("map");
           } else {
             navigate("terminal");
           }
@@ -130,6 +134,14 @@ export default function App() {
           sidebarCollapsed={lineageSidebarCollapsed}
           onChainChange={(id) => navigate("lineage", id)}
         />
+      </div>
+
+      {/* Map View: zoomable project map (see components/map) */}
+      <div
+        className="workspace-body map-workspace-wrapper"
+        style={{ display: tab === "map" ? "flex" : "none" }}
+      >
+        <MapView active={tab === "map"} />
       </div>
 
       <CatalogModal open={modalOpen} onClose={() => setModalOpen(false)} />

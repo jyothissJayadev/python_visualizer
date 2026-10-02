@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-export type AppTab = "terminal" | "routes" | "database" | "lineage";
+export type AppTab = "terminal" | "routes" | "database" | "lineage" | "map";
 
 export interface RouteState {
   tab: AppTab;
@@ -20,7 +20,10 @@ function parseCurrentRoute(): RouteState {
   const lower = hashPath.toLowerCase();
   const path = window.location.pathname.toLowerCase();
 
+  const isMap = lower.includes("map") && !lower.includes("lineage");
+
   const isLineage =
+    !isMap &&
     lower.includes("lineage") ||
     lower.includes("e2e") ||
     lower.includes("flow") ||
@@ -51,7 +54,9 @@ function parseCurrentRoute(): RouteState {
     focusParam === "connected" || focusParam === "true" || focusParam === "1";
 
   let tab: AppTab = "terminal";
-  if (isLineage) {
+  if (isMap) {
+    tab = "map";
+  } else if (isLineage) {
     tab = "lineage";
   } else if (isDatabase) {
     tab = "database";
@@ -87,7 +92,9 @@ export function useAppRouter() {
 
   const navigate = (tab: AppTab, id?: string) => {
     let newHash =
-      tab === "lineage"
+      tab === "map"
+        ? "#/map"
+        : tab === "lineage"
         ? "#/lineage"
         : tab === "database"
           ? "#/database"
