@@ -9,6 +9,21 @@ interface Props {
   onEditTemplate: (template: Template) => void;
 }
 
+function highlightMatch(text: string, query: string) {
+  if (!query.trim()) return text;
+  const q = query.trim().toLowerCase();
+  const lower = text.toLowerCase();
+  const idx = lower.indexOf(q);
+  if (idx === -1) return text;
+  return (
+    <>
+      {text.slice(0, idx)}
+      <mark className="fn-search-match">{text.slice(idx, idx + q.length)}</mark>
+      {text.slice(idx + q.length)}
+    </>
+  );
+}
+
 export function CatalogPane({
   collapsed,
   onOpenModal,
@@ -17,6 +32,7 @@ export function CatalogPane({
   const s = useTerminal();
   const [savingName, setSavingName] = useState("");
   const [showSaveInput, setShowSaveInput] = useState(false);
+  const [filterQuery, setFilterQuery] = useState("");
 
   const deepCount = useMemo(
     () =>
@@ -27,6 +43,7 @@ export function CatalogPane({
   );
 
   const selectedRows = useMemo(() => {
+    const q = filterQuery.toLowerCase().trim();
     return Array.from(s.selectedFunctions)
       .map((id) => {
         const meta = s.fnById.get(id);
@@ -38,8 +55,16 @@ export function CatalogPane({
           missing: !meta && s.catalog.groups.length > 0,
         };
       })
+      .filter((r) => {
+        if (!q) return true;
+        return (
+          r.name.toLowerCase().includes(q) ||
+          r.pkg.toLowerCase().includes(q) ||
+          r.id.toLowerCase().includes(q)
+        );
+      })
       .sort((a, b) => (a.pkg + a.name).localeCompare(b.pkg + b.name));
-  }, [s.selectedFunctions, s.fnById, s.catalog]);
+  }, [s.selectedFunctions, s.fnById, s.catalog, filterQuery]);
 
   const groupedSelected = useMemo(() => {
     const map = new Map<string, typeof selectedRows>();
@@ -91,6 +116,46 @@ export function CatalogPane({
         >
           + Add / Manage Functions
         </button>
+
+        {s.selectedFunctions.size > 0 && (
+          <div className="catalog-filter-bar" style={{ marginTop: 8, padding: 0, background: "transparent", border: "none" }}>
+            <div className="catalog-filter-box">
+              <svg
+                className="search-icon"
+                width="11"
+                height="11"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <circle cx="11" cy="11" r="8" />
+                <path d="m21 21-4.35-4.35" />
+              </svg>
+              <input
+                type="text"
+                placeholder="Search traced functions…"
+                value={filterQuery}
+                onChange={(e) => setFilterQuery(e.target.value)}
+              />
+              {filterQuery && (
+                <button
+                  type="button"
+                  className="search-clear-btn"
+                  onClick={() => setFilterQuery("")}
+                  title="Clear filter"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+            {filterQuery && (
+              <span className="badge badge-dim" style={{ fontSize: 9.5 }}>
+                {selectedRows.length}/{s.selectedFunctions.size}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="catalog-header" style={{ borderTop: "1px solid var(--border-subtle)" }}>
@@ -206,13 +271,30 @@ export function CatalogPane({
 
       <div className="catalog-tree-container">
         {selectedRows.length === 0 ? (
-          <div className="selected-empty">
-            <div style={{ fontSize: 24, marginBottom: 8, opacity: 0.8 }}>⚡</div>
-            <b>No Functions Armed</b>
-            <div style={{ marginTop: 4, color: "var(--text-muted)", fontSize: 11.5 }}>
-              Click <b>+ Add / Manage Functions</b> above to select which backend functions to trace.
+          s.selectedFunctions.size > 0 ? (
+            <div className="selected-empty">
+              <div style={{ fontSize: 20, marginBottom: 6, opacity: 0.8 }}>🔍</div>
+              <b>No Matching Functions</b>
+              <div style={{ marginTop: 4, color: "var(--text-muted)", fontSize: 11.5 }}>
+                No armed function matches "{filterQuery}".
+              </div>
+              <button
+                className="btn-sm"
+                style={{ marginTop: 8 }}
+                onClick={() => setFilterQuery("")}
+              >
+                Clear filter
+              </button>
             </div>
-          </div>
+          ) : (
+            <div className="selected-empty">
+              <div style={{ fontSize: 24, marginBottom: 8, opacity: 0.8 }}>⚡</div>
+              <b>No Functions Armed</b>
+              <div style={{ marginTop: 4, color: "var(--text-muted)", fontSize: 11.5 }}>
+                Click <b>+ Add / Manage Functions</b> above to select which backend functions to trace.
+              </div>
+            </div>
+          )
         ) : (
           groupedSelected.map((group) => (
             <div key={group.pkg} style={{ display: "flex", flexDirection: "column", gap: 5 }}>
@@ -242,7 +324,7 @@ export function CatalogPane({
                   >
                     <div className="selected-fn-main">
                       <div className="selected-fn-name-row">
-                        <span className="selected-fn-name">{r.name}</span>
+                        <span className="selected-fn-name">{highlightMatch(r.name, filterQuery)}</span>
                         {r.isAsync && (
                           <span className="badge badge-async" style={{ fontSize: 8.5, padding: "0 4px" }}>
                             async

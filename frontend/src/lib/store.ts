@@ -85,6 +85,11 @@ export interface Snapshot {
   collapsedSpanIds: Set<string>;
   spanChildCounts: Map<string, number>;
 
+  traceFnSearch: string;
+  traceFnSearchHits: string[];
+  traceFnSearchIndex: number;
+  traceFnFilterOnly: boolean;
+
   selectedSpanId: string | null;
   llmTab: LlmTab;
 
@@ -140,6 +145,10 @@ export class TerminalStore {
   private loopGroups = new Map<string, LoopGroup>();
   private collapsedSpanIds = new Set<string>();
   private selectedSpanId: string | null = null;
+  private traceFnSearch = "";
+  private traceFnSearchHits: string[] = [];
+  private traceFnSearchIndex = 0;
+  private traceFnFilterOnly = false;
   private llmTab: LlmTab = "parsed";
   private toast: ToastState | null = null;
 
@@ -552,6 +561,70 @@ export class TerminalStore {
     this.emitNow();
   }
 
+  setTraceFnSearch(q: string) {
+    this.traceFnSearch = q;
+    this.traceFnSearchIndex = 0;
+    const needle = q.toLowerCase().trim();
+    if (needle) {
+      for (const reqId of this.reqOrder) {
+        const req = this.requests.get(reqId);
+        if (!req) continue;
+        let found = false;
+        for (const sid of req.spanIds) {
+          const sp = this.spans.get(sid);
+          if (sp && this.spanMatchesFunctionSearch(sp, needle)) {
+            this.ensureSpanVisible(sid);
+            this.selectedSpanId = sid;
+            this.autoScroll = false;
+            found = true;
+            break;
+          }
+        }
+        if (found) break;
+      }
+    }
+    this.emitNow();
+  }
+
+  stepTraceFnSearch(delta: number) {
+    if (this.traceFnSearchHits.length === 0) return;
+    const len = this.traceFnSearchHits.length;
+    this.traceFnSearchIndex = (this.traceFnSearchIndex + delta + len) % len;
+    const targetSpanId = this.traceFnSearchHits[this.traceFnSearchIndex];
+    if (targetSpanId) {
+      this.ensureSpanVisible(targetSpanId);
+      this.selectedSpanId = targetSpanId;
+      this.autoScroll = false;
+    }
+    this.emitNow();
+  }
+
+  setTraceFnFilterOnly(enabled: boolean) {
+    this.traceFnFilterOnly = enabled;
+    this.emitNow();
+  }
+
+  ensureSpanVisible(spanId: string) {
+    let curr = this.spans.get(spanId);
+    let changed = false;
+    while (curr && curr.parent_span_id) {
+      if (this.collapsedSpanIds.has(curr.parent_span_id)) {
+        this.collapsedSpanIds.delete(curr.parent_span_id);
+        changed = true;
+      }
+      curr = this.spans.get(curr.parent_span_id);
+    }
+    for (const grp of this.loopGroups.values()) {
+      if (grp.memberSpanIds.includes(spanId) && !grp.expanded) {
+        grp.expanded = true;
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.emitNow();
+    }
+  }
+
   togglePause() {
     this.paused = !this.paused;
     if (this.paused) {
@@ -579,6 +652,8 @@ export class TerminalStore {
     this.focusedIndex = -1;
     this.pausedLen = this.paused ? 0 : null;
     this.seenCount = 0;
+    this.traceFnSearchHits = [];
+    this.traceFnSearchIndex = 0;
   }
 
   clearStream() {
@@ -740,6 +815,18 @@ export class TerminalStore {
     );
   }
 
+  private spanMatchesFunctionSearch(sp: SpanData, needle: string): boolean {
+    if (!needle) return false;
+    const name = sp.startEvent?.data?.name || sp.errorEvent?.data?.name || sp.llmEvent?.data?.name;
+    if (name && name.toLowerCase().includes(needle)) return true;
+    const qualname = sp.startEvent?.data?.qualname || sp.errorEvent?.data?.qualname;
+    if (qualname && qualname.toLowerCase().includes(needle)) return true;
+    const label = sp.llmEvent?.data?.label || sp.llmEvent?.data?.model;
+    if (label && label.toLowerCase().includes(needle)) return true;
+    if (sp.span_id && sp.span_id.toLowerCase().includes(needle)) return true;
+    return false;
+  }
+
   private build(): Snapshot {
     this.version++;
     const displayLen =
@@ -880,6 +967,30 @@ export class TerminalStore {
       }
     }
 
+    // ---- function search in trace stream ------------------------------
+    const needle = this.traceFnSearch.toLowerCase().trim();
+    const hits: string[] = [];
+    const hitSet = new Set<string>();
+
+    if (needle) {
+      for (const reqId of this.reqOrder) {
+        const req = this.requests.get(reqId);
+        if (!req) continue;
+        for (const sid of req.spanIds) {
+          const sp = this.spans.get(sid);
+          if (sp && this.spanMatchesFunctionSearch(sp, needle)) {
+            hits.push(sid);
+            hitSet.add(sid);
+          }
+        }
+      }
+    }
+    this.traceFnSearchHits = hits;
+    if (this.traceFnSearchIndex >= hits.length) {
+      this.traceFnSearchIndex = Math.max(0, hits.length - 1);
+    }
+    const fnFilterActive = Boolean(this.traceFnFilterOnly && needle);
+
     // rows, per request, in arrival order
     const requests: RequestView[] = [];
     let activeRequests = 0;
@@ -895,6 +1006,24 @@ export class TerminalStore {
         const depth = ev.depth || 0;
 
         if (ev.kind === "fn.start" && ev.span_id) {
+          if (fnFilterActive) {
+            if (!hitSet.has(ev.span_id)) {
+              const grp = firstMemberToGroup.get(ev.span_id);
+              if (grp && grp.memberSpanIds.some((m) => hitSet.has(m))) {
+                rows.push({
+                  rowKind: "loop",
+                  key: grp.key,
+                  group: grp,
+                  depth,
+                  spanId: ev.span_id,
+                });
+              }
+              continue;
+            }
+            rows.push({ rowKind: "fn", spanId: ev.span_id, depth });
+            continue;
+          }
+
           if (hiddenByParentCollapse.has(ev.span_id)) continue;
           const grp = firstMemberToGroup.get(ev.span_id);
           if (grp && !hiddenByLoop.has(ev.span_id) && !spanGated(ev.span_id)) {
@@ -912,6 +1041,11 @@ export class TerminalStore {
           if (!this.eventFilterMatch(ev)) continue;
           rows.push({ rowKind: "fn", spanId: ev.span_id, depth });
         } else if (ev.kind === "fn.error" && ev.span_id) {
+          if (fnFilterActive) {
+            if (!hitSet.has(ev.span_id)) continue;
+            rows.push({ rowKind: "error", spanId: ev.span_id, depth });
+            continue;
+          }
           if (hiddenByParentCollapse.has(ev.span_id)) continue;
           if (hiddenByLoop.has(ev.span_id) || collapsedMembers.has(ev.span_id))
             continue;
@@ -919,6 +1053,11 @@ export class TerminalStore {
           if (!this.eventFilterMatch(ev)) continue;
           rows.push({ rowKind: "error", spanId: ev.span_id, depth });
         } else if (ev.kind === "llm.call" && ev.span_id) {
+          if (fnFilterActive) {
+            if (!hitSet.has(ev.span_id)) continue;
+            rows.push({ rowKind: "llm", spanId: ev.span_id, depth });
+            continue;
+          }
           if (hiddenByParentCollapse.has(ev.span_id)) continue;
           if (hiddenByLoop.has(ev.span_id) || collapsedMembers.has(ev.span_id))
             continue;
@@ -926,6 +1065,7 @@ export class TerminalStore {
           if (!this.eventFilterMatch(ev)) continue;
           rows.push({ rowKind: "llm", spanId: ev.span_id, depth });
         } else if (ev.kind === "log") {
+          if (fnFilterActive) continue;
           if (!this.eventFilterMatch(ev)) continue;
           rows.push({
             rowKind: "log",
@@ -935,7 +1075,9 @@ export class TerminalStore {
         }
       }
 
-      const visible = !gate || this.reqSelectedCall(reqId) === true;
+      const visible =
+        (!gate || this.reqSelectedCall(reqId) === true) &&
+        (!fnFilterActive || rows.length > 0);
       requests.push({
         id: reqId,
         startEvent: req.startEvent,
@@ -991,6 +1133,10 @@ export class TerminalStore {
       requestMeta: this.requests,
       collapsedSpanIds: new Set(this.collapsedSpanIds),
       spanChildCounts,
+      traceFnSearch: this.traceFnSearch,
+      traceFnSearchHits: this.traceFnSearchHits,
+      traceFnSearchIndex: this.traceFnSearchIndex,
+      traceFnFilterOnly: this.traceFnFilterOnly,
       selectedSpanId: this.selectedSpanId,
       llmTab: this.llmTab,
       toast: this.toast,

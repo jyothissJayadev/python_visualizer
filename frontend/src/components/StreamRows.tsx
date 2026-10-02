@@ -18,12 +18,33 @@ function shortName(span: SpanData): string {
   return label ? label.split(":").pop()! : "anonymous";
 }
 
+function highlightMatch(text: string, query: string) {
+  if (!query.trim()) return text;
+  const q = query.trim().toLowerCase();
+  const lower = text.toLowerCase();
+  const idx = lower.indexOf(q);
+  if (idx === -1) return text;
+  return (
+    <>
+      {text.slice(0, idx)}
+      <mark className="fn-search-match">{text.slice(idx, idx + q.length)}</mark>
+      {text.slice(idx + q.length)}
+    </>
+  );
+}
+
 interface RowProps {
   row: StreamRow;
   snap: Snapshot;
 }
 
 export function StreamRowSwitch({ row, snap }: RowProps) {
+  const currentHitSpanId =
+    snap.traceFnSearchHits.length > 0
+      ? snap.traceFnSearchHits[snap.traceFnSearchIndex]
+      : null;
+  const hasFnSearch = Boolean(snap.traceFnSearch.trim());
+
   if (row.rowKind === "log") {
     const level = (row.event.data?.level || "info").toLowerCase();
     return (
@@ -66,12 +87,17 @@ export function StreamRowSwitch({ row, snap }: RowProps) {
     const name = firstSpan ? shortName(firstSpan) : "loop";
     const track = getFunctionTrackInfo(firstSpan, snap);
 
+    const isLoopHit = hasFnSearch && g.memberSpanIds.some((id) => snap.traceFnSearchHits.includes(id));
+    const isLoopCurrent = hasFnSearch && Boolean(currentHitSpanId && g.memberSpanIds.includes(currentHitSpanId));
+
     return (
       <div
+        id={`trace-span-${row.spanId}`}
         className={
           "stream-row loop-group-row" +
           (g.expanded ? " expanded" : "") +
-          (track.isMain ? " row-main-fn" : "")
+          (track.isMain ? " row-main-fn" : "") +
+          (isLoopCurrent ? " search-hit-current" : isLoopHit ? " search-hit" : "")
         }
         title={
           g.expanded
@@ -91,9 +117,14 @@ export function StreamRowSwitch({ row, snap }: RowProps) {
               {track.isDeep ? "⚡ MAIN LOOP" : "🎯 MAIN LOOP"}
             </span>
           )}
+          {isLoopHit && !g.expanded && (
+            <span className="badge badge-search-hit" title="Loop contains matching function calls">
+              🔍 MATCH
+            </span>
+          )}
           <span className="fn-name-label">
             <span className="loop-loop-icon">↻</span>
-            <span>{name}()</span>
+            <span>{highlightMatch(name, snap.traceFnSearch)}()</span>
           </span>
           <span className="loop-count">×{n}</span>
         </div>
@@ -116,7 +147,15 @@ export function StreamRowSwitch({ row, snap }: RowProps) {
   const selected = snap.selectedSpanId === row.spanId;
   const track = getFunctionTrackInfo(span, snap);
 
+  const isHit = hasFnSearch && snap.traceFnSearchHits.includes(row.spanId);
+  const isCurrent = hasFnSearch && currentHitSpanId === row.spanId;
+
   let cls = "stream-row" + (selected ? " selected" : "");
+  if (isCurrent) {
+    cls += " search-hit-current";
+  } else if (isHit) {
+    cls += " search-hit";
+  }
   if (track.isMain) {
     cls += " row-main-fn";
     if (track.isDeep) cls += " row-main-deep";
@@ -126,8 +165,9 @@ export function StreamRowSwitch({ row, snap }: RowProps) {
 
   if (row.rowKind === "error") {
     const d = span.errorEvent?.data || {};
+    const errFn = d.name ? d.name.split(":").pop()! : "function";
     return (
-      <div className={cls + " row-error"} onClick={() => store.selectSpan(row.spanId)}>
+      <div id={`trace-span-${row.spanId}`} className={cls + " row-error"} onClick={() => store.selectSpan(row.spanId)}>
         <TreeGuide depth={row.depth} />
         <div className="row-content">
           {track.isMain && (
@@ -136,7 +176,7 @@ export function StreamRowSwitch({ row, snap }: RowProps) {
             </span>
           )}
           <span className="fn-name-label">
-            ⚠️ {d.name ? d.name.split(":").pop() : "function"}
+            ⚠️ {highlightMatch(errFn, snap.traceFnSearch)}
           </span>
           <span className="badge badge-slow">{d.exc_type || "Error"}</span>
           <span className="fn-args-preview" style={{ color: "#fca5a5" }}>
@@ -156,11 +196,12 @@ export function StreamRowSwitch({ row, snap }: RowProps) {
     const d = span.llmEvent?.data || {};
     const dur = d.duration_ms || 0;
     const tok = d.tokens;
+    const llmLabel = d.label || "generation";
     return (
-      <div className={cls + " row-llm"} onClick={() => store.selectSpan(row.spanId)}>
+      <div id={`trace-span-${row.spanId}`} className={cls + " row-llm"} onClick={() => store.selectSpan(row.spanId)}>
         <TreeGuide depth={row.depth} />
         <div className="row-content">
-          <span className="fn-name-label">✨ {d.label || "generation"}</span>
+          <span className="fn-name-label">✨ {highlightMatch(llmLabel, snap.traceFnSearch)}</span>
           <span className="badge badge-llm">{d.model || "llm"}</span>
           {tok && (
             <span className="badge badge-dim" style={{ fontSize: 10 }}>
@@ -192,8 +233,14 @@ export function StreamRowSwitch({ row, snap }: RowProps) {
   const hasChildren = childCount > 0;
   const isCollapsed = snap.collapsedSpanIds.has(span.span_id);
 
+  const fnShort = shortName(span);
+  const fullName = sd.name || span.errorEvent?.data?.name || "";
+  const needle = snap.traceFnSearch.toLowerCase().trim();
+  const shortMatches = needle ? fnShort.toLowerCase().includes(needle) : false;
+  const pkgMatches = needle && !shortMatches && fullName.toLowerCase().includes(needle);
+
   return (
-    <div className={cls} onClick={() => store.selectSpan(row.spanId)}>
+    <div id={`trace-span-${row.spanId}`} className={cls} onClick={() => store.selectSpan(row.spanId)}>
       <TreeGuide depth={row.depth} />
       <div className="row-content">
         {hasChildren && (
@@ -229,7 +276,12 @@ export function StreamRowSwitch({ row, snap }: RowProps) {
             ↳ ENTRY
           </span>
         ) : null}
-        <span className="fn-name-label">{shortName(span)}</span>
+        <span className="fn-name-label">{highlightMatch(fnShort, snap.traceFnSearch)}</span>
+        {pkgMatches && (
+          <span className="badge badge-pkg-match" title={fullName}>
+            in {fullName.split(":")[0]}
+          </span>
+        )}
         {isCollapsed && hasChildren && (
           <span
             className="badge badge-dim inner-collapsed-pill"

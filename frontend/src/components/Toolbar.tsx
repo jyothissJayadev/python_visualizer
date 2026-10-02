@@ -116,6 +116,16 @@ export function Toolbar({
                 value={s.filterQuery}
                 onChange={(e) => store.setFilterQuery(e.target.value)}
               />
+              {s.filterQuery && (
+                <button
+                  type="button"
+                  className="search-clear-btn"
+                  onClick={() => store.setFilterQuery("")}
+                  title="Clear filter"
+                >
+                  ✕
+                </button>
+              )}
             </div>
 
             <ToolbarStreamMenu />
