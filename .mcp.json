@@ -7,7 +7,7 @@
         "backend.mcp_server"
       ],
       "env": {
-        "BRAIN_COLLECTOR_URL": "http://127.0.0.1:8011"
+        "BRAIN_COLLECTOR_URL": "http://127.0.0.1:24811"
       }
     },
     "brain-telemetry-arthur": {
@@ -17,7 +17,7 @@
         "backend.mcp_server"
       ],
       "env": {
-        "BRAIN_COLLECTOR_URL": "http://127.0.0.1:8012"
+        "BRAIN_COLLECTOR_URL": "http://127.0.0.1:24812"
       }
     }
   }

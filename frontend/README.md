@@ -25,7 +25,7 @@ React 19 + TypeScript + Vite. The port of what used to be
 ## Scripts
 
 ```bash
-npm run dev      # Vite dev server on :5177; proxies /viewer/* to backend :8011
+npm run dev      # Vite dev server on :24821; proxies /viewer/* to backend :24811
 npm run build    # tsc -b && vite build  (base: /viewer/terminal/)
 npm run lint     # oxlint
 ```

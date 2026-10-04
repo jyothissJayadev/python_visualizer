@@ -110,19 +110,63 @@ def _branches(fn_node: ast.AST) -> int:
     return n
 
 
+_APP_CTORS = ("FastAPI", "Starlette")
+
+
+def _called_name(value: ast.expr) -> str | None:
+    if not isinstance(value, ast.Call):
+        return None
+    fn = value.func
+    return fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else None
+
+
+def _app_factories(analysis: Analysis) -> dict[str, tuple[str, int]]:
+    """Functions that build an app (``def create_app(): app = FastAPI(...)``): id -> (framework, line)."""
+    out: dict[str, tuple[str, int]] = {}
+    for fn in analysis.registry.funcs.values():
+        for node in ast.walk(fn.node):
+            if isinstance(node, (ast.Assign, ast.AnnAssign, ast.Return)) and isinstance(node.value, ast.Call):
+                called = _called_name(node.value)
+                if called in _APP_CTORS:
+                    out[fn.id] = (called, node.value.lineno)
+                    break
+    return out
+
+
 def _entry_points(analysis: Analysis) -> list[dict[str, Any]]:
-    out = []
+    out: list[dict[str, Any]] = []
+    factories = _app_factories(analysis)
+    by_name: dict[tuple[str, str], str] = {}  # (module, function name) -> factory id
+    for fid in factories:
+        fn = analysis.registry.funcs[fid]
+        if fn.class_id is None and fn.parent_id is None:
+            by_name[(fn.module, fn.name)] = fid
+    claimed: set[str] = set()
     for module, assigns in analysis.registry.module_assigns.items():
+        mod = analysis.index.modules.get(module)
         for name, value in assigns.items():
-            if isinstance(value, ast.Call):
-                fn = value.func
-                called = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else None
-                if called in ("FastAPI", "Starlette"):
-                    mod = analysis.index.modules.get(module)
-                    out.append({
-                        "id": f"{module}:{name}", "kind": "app", "framework": called, "module": module,
-                        "file_path": mod.file_path if mod else None, "line": value.lineno,
-                    })
+            called = _called_name(value)
+            framework, factory = called, None
+            if called not in _APP_CTORS:  # ``app = create_app()`` (same module or imported)
+                factory = by_name.get((module, called)) if called else None
+                if factory is None and called and mod and called in mod.imports:
+                    src, attr = mod.imports[called]
+                    factory = by_name.get((src, attr or called))
+                if factory is None:
+                    continue
+                framework = factories[factory][0]
+                claimed.add(factory)
+            out.append({
+                "id": f"{module}:{name}", "kind": "app", "framework": framework, "module": module,
+                "file_path": mod.file_path if mod else None, "line": value.lineno,
+                **({"factory": factory} if factory else {}),
+            })
+    for fid, (framework, line) in factories.items():
+        if fid in claimed:
+            continue
+        fn = analysis.registry.funcs[fid]  # factory never called at module level (``uvicorn --factory``)
+        out.append({"id": fid, "kind": "factory", "framework": framework, "module": fn.module,
+                    "file_path": fn.file_path, "line": line})
     return out
 
 

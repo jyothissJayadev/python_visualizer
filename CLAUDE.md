@@ -3,7 +3,7 @@
 ## Overview
 This repository contains **Brain Terminal** (`python-backend-explorer`), a live telemetry, AST function scanner, and runtime I/O inspector for Python backends.
 
-When writing, debugging, or modifying code in this codebase or the target backend, you have access to the **`brain-telemetry-*` MCP tools** to inspect real runtime behavior. There is one MCP server per visualizer instance (see `instances.json`): use `brain-telemetry-atomics` (collector :8011) for the atomics `brain` service and `brain-telemetry-arthur` (collector :8012) for Arthur. Tool names are namespaced by server, e.g. `mcp__brain-telemetry-arthur__arm_functions`.
+When writing, debugging, or modifying code in this codebase or the target backend, you have access to the **`brain-telemetry-*` MCP tools** to inspect real runtime behavior. There is one MCP server per visualizer instance (see `instances.json`): use `brain-telemetry-atomics` (collector :24811) for the atomics `brain` service and `brain-telemetry-arthur` (collector :24812) for Arthur. Tool names are namespaced by server, e.g. `mcp__brain-telemetry-arthur__arm_functions`.
 
 ---
 
@@ -58,8 +58,8 @@ The project is modelled as a map (Map tab in the dashboard): entry point → mod
 ## ⚙️ Setup & Registration
 Each MCP server talks to one collector, selected by `BRAIN_COLLECTOR_URL`. Register one per instance:
 ```bash
-claude mcp add brain-telemetry-atomics -e BRAIN_COLLECTOR_URL=http://127.0.0.1:8011 -- .venv/bin/python -m backend.mcp_server
-claude mcp add brain-telemetry-arthur  -e BRAIN_COLLECTOR_URL=http://127.0.0.1:8012 -- .venv/bin/python -m backend.mcp_server
+claude mcp add brain-telemetry-atomics -e BRAIN_COLLECTOR_URL=http://127.0.0.1:24811 -- .venv/bin/python -m backend.mcp_server
+claude mcp add brain-telemetry-arthur  -e BRAIN_COLLECTOR_URL=http://127.0.0.1:24812 -- .venv/bin/python -m backend.mcp_server
 ```
 or ensure `.mcp.json` exists in the repository root (it ships this way):
 ```json
@@ -68,12 +68,12 @@ or ensure `.mcp.json` exists in the repository root (it ships this way):
     "brain-telemetry-atomics": {
       "command": ".venv/bin/python",
       "args": ["-m", "backend.mcp_server"],
-      "env": { "BRAIN_COLLECTOR_URL": "http://127.0.0.1:8011" }
+      "env": { "BRAIN_COLLECTOR_URL": "http://127.0.0.1:24811" }
     },
     "brain-telemetry-arthur": {
       "command": ".venv/bin/python",
       "args": ["-m", "backend.mcp_server"],
-      "env": { "BRAIN_COLLECTOR_URL": "http://127.0.0.1:8012" }
+      "env": { "BRAIN_COLLECTOR_URL": "http://127.0.0.1:24812" }
     }
   }
 }

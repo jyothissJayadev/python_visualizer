@@ -10,6 +10,7 @@ const CARD_GAP = 10;
 const MOD_PAD = 14;
 const MOD_HEAD = 34;
 const MOD_GAP = 36;
+export const COLLAPSED_H = 64;
 const COL_GAP = 130;
 export const MOD_W = CARD_W + MOD_PAD * 2;
 
@@ -28,7 +29,8 @@ export interface MapLayout {
   bounds: Box;
 }
 
-export function layoutMap(map: ProjectMap): MapLayout {
+/** `expanded` = modules whose main-function cards are laid out; the rest stay compact boxes. */
+export function layoutMap(map: ProjectMap, expanded: ReadonlySet<string> = new Set()): MapLayout {
   const fnModule = (id: string) => map.functions[id]?.module;
 
   // column of a module = shallowest call depth among its main functions
@@ -54,10 +56,11 @@ export function layoutMap(map: ProjectMap): MapLayout {
   for (const [c, mods] of [...byCol.entries()].sort((a, b) => a[0] - b[0])) {
     let y = 0;
     for (const m of mods.sort((a, b) => a.module.localeCompare(b.module))) {
-      const h = MOD_HEAD + MOD_PAD + m.functions.length * (CARD_H + CARD_GAP) - CARD_GAP + MOD_PAD;
+      const open = expanded.has(m.module);
+      const h = open ? MOD_HEAD + MOD_PAD + m.functions.length * (CARD_H + CARD_GAP) - CARD_GAP + MOD_PAD : COLLAPSED_H;
       const x = originX + c * (MOD_W + COL_GAP);
       modules[m.module] = { x, y, w: MOD_W, h, col: c };
-      m.functions.forEach((f, i) => {
+      if (open) m.functions.forEach((f, i) => {
         cards[f] = { x: x + MOD_PAD, y: y + MOD_HEAD + MOD_PAD + i * (CARD_H + CARD_GAP), w: CARD_W, h: CARD_H };
       });
       y += h + MOD_GAP;

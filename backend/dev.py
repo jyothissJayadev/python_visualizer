@@ -26,8 +26,8 @@ from backend.instances import DEFAULT_INSTANCES_FILE, Instance, InstanceError, l
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = ROOT / "frontend"
 
-DEFAULT_BACKEND_PORT = 8011
-DEFAULT_FRONTEND_PORT = 5177
+DEFAULT_BACKEND_PORT = 24811
+DEFAULT_FRONTEND_PORT = 24821
 
 
 def backend_command(inst: Instance) -> list[str]:

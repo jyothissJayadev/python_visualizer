@@ -24,7 +24,7 @@ except ImportError:
     from mcp.server.fastmcp import FastMCP  # type: ignore
     mcp = FastMCP("brain-telemetry")
 
-COLLECTOR_URL = os.environ.get("BRAIN_COLLECTOR_URL", "http://127.0.0.1:8011").rstrip("/")
+COLLECTOR_URL = os.environ.get("BRAIN_COLLECTOR_URL", "http://127.0.0.1:24811").rstrip("/")
 
 
 def _explain(exc: Exception) -> str:

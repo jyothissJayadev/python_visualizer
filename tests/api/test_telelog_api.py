@@ -107,3 +107,9 @@ def test_map_endpoint_always_answers_and_live_endpoint_redacts(client: TestClien
     finally:
         viewer.HUB.recent.pop()
     assert client.get("/viewer/telelog/live", params={"id": "nope:x"}).status_code == 404
+
+
+def test_flow_endpoint(client: TestClient, project: Path):
+    f = client.get("/viewer/telelog/flow", params={"id": "app.api:post_order"}).json()
+    assert f["route"] == "POST /orders" and f["steps"][0]["id"] == "app.api:post_order" and len(f["steps"]) == 8
+    assert client.get("/viewer/telelog/flow", params={"id": "nope:x"}).status_code == 404

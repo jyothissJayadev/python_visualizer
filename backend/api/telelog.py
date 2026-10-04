@@ -2,6 +2,7 @@
 
   GET    /viewer/telelog/map                    everything the Telelog view draws (also when nothing is tagged)
   GET    /viewer/telelog/live?id=               declared fields of a tag with sample values from the newest trace
+  GET    /viewer/telelog/flow?id=               the order an endpoint's code runs in, depth first (for the Run flow player)
   GET    /viewer/telelog/validate               every tag checked against the code
   GET    /viewer/telelog/untagged?limit&cursor&feature   a page of functions with no tag
   GET    /viewer/telelog/function?ids=a&ids=b   source, route, callers, callees, tables, existing tag
@@ -130,3 +131,12 @@ async def live(request: Request, id: str) -> dict[str, Any]:
         raise HTTPException(404, f"function not found: {id}")
     tag = tagged_function_ids(read_tags(c.analysis)).get(id)
     return live_values(list(viewer.HUB.recent), id, tag, f.params)
+
+
+@router.get("/flow")
+async def flow(request: Request, id: str) -> dict[str, Any]:
+    c = await _ctx(request)
+    out = tools.flow_steps(c.analysis, id)
+    if out is None:
+        raise HTTPException(404, f"function not found: {id}")
+    return out

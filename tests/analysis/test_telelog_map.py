@@ -125,3 +125,73 @@ def test_viewer_map_adds_telelog_only_when_tags_exist(project: Path, tmp_path: P
         assert m["telelog"]["coverage"]["tagged"] == 3
         assert m["functions"]["app.utils:norm"]["role"] == "child"
         assert json.dumps(m)  # the payload is plain JSON
+
+
+def test_payload_carries_module_signature_and_files_for_the_city_view(project: Path):
+    apply_tags(project)
+    a = Analysis(str(project))
+    t = tools.telelog_payload(a, read_tags(a), {})
+    fn = t["functions"]["app.services:create_order"]
+    assert fn["module"] == "app.services" and fn["signature"] == "create_order(body)"
+    assert t["files"]["app.api"] == "app/api.py" and set(t["files"]) == {"app.api", "app.services", "app.utils"}  # modules with functions only
+
+
+def test_payload_carries_endpoint_details_and_the_app_entry_point(project: Path):
+    apply_tags(project)
+    a = Analysis(str(project))
+    t = tools.telelog_payload(a, read_tags(a), {})
+    ep = t["functions"]["app.api:post_order"]["endpoints"]
+    assert [(e["method"], e["path"]) for e in ep] == [("POST", "/orders")]
+    assert set(ep[0]) == {"id", "method", "path", "status_code", "response_model", "dependencies", "summary"}
+    assert t["functions"]["app.services:create_order"]["endpoints"] == []  # not a handler
+    assert [(e["id"], e["framework"], e["module"]) for e in t["entry_points"]] == [("app.main:app", "FastAPI", "app.main")]
+    assert t["endpoint_count"] == 2
+
+
+def test_payload_has_function_to_function_calls_for_every_tagged_function(project: Path):
+    apply_tags(project)
+    a = Analysis(str(project))
+    t = tools.telelog_payload(a, read_tags(a), {})
+    # post_order -> create_order -> norm, among tagged functions only (list_orders is untagged)
+    assert t["calls"] == {
+        "app.api:post_order": [{"to": "app.services:create_order", "n": 1, "edge": "await"}],
+        "app.services:create_order": [{"to": "app.utils:norm", "n": 1, "edge": "call"}],
+    }
+
+
+def test_function_calls_counts_call_sites_and_ignores_self_and_untracked(tmp_path: Path):
+    (tmp_path / "m.py").write_text(
+        "def helper(x):\n    return x\n\n"
+        "def other():\n    return 1\n\n"
+        "def top(xs):\n    for x in xs:\n        helper(x)\n    helper(1)\n    top(xs)\n    other()\n    len(xs)\n",
+        encoding="utf-8")
+    a = Analysis(str(tmp_path))
+    calls = tools.function_calls(a, ["m:top", "m:helper"])  # `other` is not asked about
+    assert calls == {"m:top": [{"to": "m:helper", "n": 2, "edge": "call"}]}
+
+
+def test_flow_steps_walk_the_call_tree_in_source_order_marking_repeats(project: Path):
+    a = Analysis(str(project))
+    f = tools.flow_steps(a, "app.api:post_order")
+    assert f["route"] == "POST /orders" and f["handler"] == "app.api:post_order" and not f["truncated"]
+    got = [(s["i"], s["kind"], s["id"], s["depth"], s["parent"], s["repeat"]) for s in f["steps"]]
+    assert got == [
+        (0, "fn", "app.api:post_order", 0, None, False),
+        (1, "fn", "app.services:create_order", 1, 0, False),
+        (2, "fn", "app.utils:norm", 2, 1, False),
+        (3, "external", "httpx.AsyncClient", 2, 1, False),
+        (4, "external", "httpx.AsyncClient().post", 2, 1, False),
+        (5, "fn", "app.services:list_orders", 2, 1, False),
+        (6, "fn", "app.utils:norm", 3, 5, True),  # reached again: listed, not expanded twice
+        (7, "fn", "app.utils:_tiny", 3, 5, False),
+    ]
+    assert f["steps"][1]["edge"] == "await" and f["steps"][1]["line"] == 6  # the call site in the handler
+
+
+def test_flow_steps_caps_the_walk_and_handles_unknown_ids(project: Path):
+    a = Analysis(str(project))
+    capped = tools.flow_steps(a, "app.api:post_order", max_steps=3)
+    assert len(capped["steps"]) == 3 and capped["truncated"] is True
+    assert tools.flow_steps(a, "nope:missing") is None
+    # a function that is not an endpoint can be walked too
+    assert [s["id"] for s in tools.flow_steps(a, "app.services:list_orders")["steps"]][:2] == ["app.services:list_orders", "app.utils:norm"]

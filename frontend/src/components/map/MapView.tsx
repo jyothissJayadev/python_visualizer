@@ -8,9 +8,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { mapApi, type AlgoStep, type AlgorithmCard, type MapFunction, type ProjectMap } from "../../lib/mapApi";
 import { edgePath, layoutMap, type Box } from "../../lib/mapLayout";
-import { TelelogMap, ViewSwitch } from "./TelelogMap";
+import { CityMap } from "./CityMap";
+import { TelelogMap, ViewSwitch, type Mode } from "./TelelogMap";
 
 const MIN_K = 0.08;
+const READABLE_K = 0.4; // never auto-fit below this: module names must stay legible
 const MAX_K = 3.2;
 const CARD_LEVEL = 0.5;
 const DETAIL_LEVEL = 1.3;
@@ -55,18 +57,20 @@ function StepTree({ steps, onJump }: { steps: AlgoStep[]; onJump: (id: string) =
   );
 }
 
-function DeterministicMap({ active, onSwitch }: { active: boolean; onSwitch: () => void }) {
+function DeterministicMap({ active, onSwitch }: { active: boolean; onSwitch: (m: Mode) => void }) {
   const [map, setMap] = useState<ProjectMap | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<View>({ x: 20, y: 20, k: 0.6 });
   const [selected, setSelected] = useState<string | null>(null);
   const [card, setCard] = useState<AlgorithmCard | null>(null);
   const [query, setQuery] = useState("");
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const wrapRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{ x: number; y: number; vx: number; vy: number; moved: boolean } | null>(null);
   const loaded = useRef(false);
+  const pendingFocus = useRef<string | null>(null);
 
-  const layout = useMemo(() => (map ? layoutMap(map) : null), [map]);
+  const layout = useMemo(() => (map ? layoutMap(map, expanded) : null), [map, expanded]);
 
   const fit = useCallback(() => {
     const el = wrapRef.current;
@@ -74,9 +78,25 @@ function DeterministicMap({ active, onSwitch }: { active: boolean; onSwitch: () 
     const { clientWidth: w, clientHeight: h } = el;
     const bw = layout.bounds.w + (layout.entry ? 0 : 0) + 80;
     const bh = layout.bounds.h + 80;
-    const k = Math.min(Math.max(Math.min(w / bw, h / bh), MIN_K), 1);
-    setView({ k, x: (w - layout.bounds.w * k) / 2, y: (h - layout.bounds.h * k) / 2 });
+    const fitK = Math.min(w / bw, h / bh);
+    if (fitK >= READABLE_K) {
+      const k = Math.min(fitK, 1);
+      setView({ k, x: (w - layout.bounds.w * k) / 2, y: (h - layout.bounds.h * k) / 2 });
+      return;
+    }
+    // too big to show whole at a readable size: start at the entry point (or top-left) and let the user pan
+    const k = READABLE_K;
+    const focusY = layout.entry ? layout.entry.y + layout.entry.h / 2 : h / 2 / k;
+    setView({ k, x: 24, y: Math.min(70, h / 2 - focusY * k) });
   }, [layout]);
+
+  const toggleModule = useCallback((name: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(name)) next.add(name);
+      return next;
+    });
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -94,9 +114,13 @@ function DeterministicMap({ active, onSwitch }: { active: boolean; onSwitch: () 
     }
   }, [active, load]);
 
+  const fitted = useRef<ProjectMap | null>(null);
   useEffect(() => {
-    if (layout && active) fit();
-  }, [layout, active, fit]);
+    if (layout && active && fitted.current !== map) {
+      fitted.current = map;
+      fit();
+    }
+  }, [layout, active, fit, map]);
 
   useEffect(() => {
     if (!selected) return;
@@ -138,13 +162,29 @@ function DeterministicMap({ active, onSwitch }: { active: boolean; onSwitch: () 
     [],
   );
 
+  // a function picked inside a collapsed module: the module opens first, then the view moves to the card
+  useEffect(() => {
+    const id = pendingFocus.current;
+    const box = id ? layout?.cards[id] : undefined;
+    if (id && box) {
+      pendingFocus.current = null;
+      zoomTo(box);
+    }
+  }, [layout, zoomTo]);
+
   const select = useCallback(
     (id: string) => {
       setSelected(id);
+      const mod = map?.functions[id]?.module;
+      if (mod && !expanded.has(mod)) {
+        setExpanded((prev) => new Set(prev).add(mod));
+        pendingFocus.current = id;
+        return;
+      }
       const box = layout?.cards[id];
       if (box) zoomTo(box);
     },
-    [layout, zoomTo],
+    [layout, zoomTo, map, expanded],
   );
 
   const jump = useCallback(
@@ -230,7 +270,7 @@ function DeterministicMap({ active, onSwitch }: { active: boolean; onSwitch: () 
     <div className="mp-workspace">
       <div className="mp-canvas-wrap" ref={wrapRef}>
         <div className="mp-toolbar">
-          <ViewSwitch mode="deterministic" onChange={(m) => m === "telelog" && onSwitch()} />
+          <ViewSwitch mode="deterministic" onChange={onSwitch} />
           <div className="mp-search">
             <input
               className="rt-input"
@@ -266,6 +306,14 @@ function DeterministicMap({ active, onSwitch }: { active: boolean; onSwitch: () 
           <span className="mp-level">{level}</span>
           <button type="button" className="btn-icon" onClick={() => zoomBy(1.4)} title="Zoom in">＋</button>
           <button type="button" className="btn-icon" onClick={() => zoomBy(1 / 1.4)} title="Zoom out">－</button>
+          <button
+            type="button"
+            className="btn-icon"
+            onClick={() => setExpanded(expanded.size ? new Set() : new Set(map?.modules.map((m) => m.module) ?? []))}
+            title={expanded.size ? "Collapse all modules" : "Expand all modules"}
+          >
+            {expanded.size ? "▤" : "▦"}
+          </button>
           <button type="button" className="btn-icon" onClick={fit} title="Fit whole project">⤢</button>
           <button type="button" className="btn-icon" onClick={() => void load()} title="Reload map">↻</button>
         </div>
@@ -295,11 +343,18 @@ function DeterministicMap({ active, onSwitch }: { active: boolean; onSwitch: () 
                 const b = layout.modules[m.module];
                 if (!b) return null;
                 return (
-                  <g key={m.module} className={`mp-module mp-layer-${m.layer}`}>
+                  <g
+                    key={m.module}
+                    className={`mp-module mp-layer-${m.layer} ${expanded.has(m.module) ? "open" : "closed"}`}
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      if (!suppressClick.current) toggleModule(m.module);
+                    }}
+                  >
                     <rect x={b.x} y={b.y} width={b.w} height={b.h} rx={12} />
-                    <text x={b.x + 14} y={b.y + 22} className="mp-module-name">{m.module}</text>
-                    {level === "modules" && (
-                      <text x={b.x + 14} y={b.y + b.h / 2 + 8} className="mp-module-count">
+                    <text x={b.x + 14} y={b.y + 22} className="mp-module-name">{expanded.has(m.module) ? "▾ " : "▸ "}{m.module}</text>
+                    {(level === "modules" || !expanded.has(m.module)) && (
+                      <text x={b.x + 14} y={b.y + (expanded.has(m.module) ? b.h / 2 + 8 : 46)} className="mp-module-count">
                         {m.functions.length} function{m.functions.length === 1 ? "" : "s"} · {m.layer}
                       </text>
                     )}
@@ -308,30 +363,32 @@ function DeterministicMap({ active, onSwitch }: { active: boolean; onSwitch: () 
               })}
 
               {/* edges */}
-              {level === "modules"
-                ? layout.moduleEdges.map((e) => (
+              {layout.moduleEdges
+                .filter((e) => level === "modules" || !(expanded.has(e.from) && expanded.has(e.to)))
+                .map((e) => (
+                  <path
+                    key={`${e.from}>${e.to}`}
+                    d={edgePath(layout.modules[e.from], layout.modules[e.to])}
+                    className="mp-edge"
+                    strokeWidth={Math.min(1 + e.count, 6)}
+                    markerEnd="url(#mp-arrow)"
+                  />
+                ))}
+              {level !== "modules" &&
+                map.edges.map((e) => {
+                  const a = layout.cards[e.from];
+                  const b = layout.cards[e.to];
+                  if (!a || !b) return null;
+                  const hot = selected && (e.from === selected || e.to === selected);
+                  return (
                     <path
                       key={`${e.from}>${e.to}`}
-                      d={edgePath(layout.modules[e.from], layout.modules[e.to])}
-                      className="mp-edge"
-                      strokeWidth={Math.min(1 + e.count, 6)}
+                      d={edgePath(a, b)}
+                      className={`mp-edge ${e.kind === "depends" ? "mp-edge-dep" : ""} ${hot ? "hot" : selected ? "dim" : ""}`}
                       markerEnd="url(#mp-arrow)"
                     />
-                  ))
-                : map.edges.map((e) => {
-                    const a = layout.cards[e.from];
-                    const b = layout.cards[e.to];
-                    if (!a || !b) return null;
-                    const hot = selected && (e.from === selected || e.to === selected);
-                    return (
-                      <path
-                        key={`${e.from}>${e.to}`}
-                        d={edgePath(a, b)}
-                        className={`mp-edge ${e.kind === "depends" ? "mp-edge-dep" : ""} ${hot ? "hot" : selected ? "dim" : ""}`}
-                        markerEnd="url(#mp-arrow)"
-                      />
-                    );
-                  })}
+                  );
+                })}
 
               {/* entry point -> modules that hold endpoint handlers */}
               {layout.entry && (
@@ -467,17 +524,20 @@ function DeterministicMap({ active, onSwitch }: { active: boolean; onSwitch: () 
   );
 }
 
-/** Telelog (what things mean) and Deterministic (what the code does) are one click apart; both stay mounted so
- *  switching back keeps your place. */
+/** Three ways to read the same project: City (what it is, as a map), Flows (how data moves, step by step) and
+ *  Deterministic (what the code does). One click apart; all stay mounted so switching back keeps your place. */
 export function MapView({ active }: { active: boolean }) {
-  const [mode, setMode] = useState<"telelog" | "deterministic">("telelog");
+  const [mode, setMode] = useState<Mode>("city");
   return (
     <>
-      <div className="tl-pane" style={{ display: mode === "telelog" ? "flex" : "none" }}>
-        <TelelogMap active={active && mode === "telelog"} onSwitch={() => setMode("deterministic")} />
+      <div className="tl-pane" style={{ display: mode === "city" ? "flex" : "none" }}>
+        <CityMap active={active && mode === "city"} mode={mode} onSwitch={setMode} />
+      </div>
+      <div className="tl-pane" style={{ display: mode === "flows" ? "flex" : "none" }}>
+        <TelelogMap active={active && mode === "flows"} onSwitch={setMode} />
       </div>
       <div className="tl-pane" style={{ display: mode === "deterministic" ? "flex" : "none" }}>
-        <DeterministicMap active={active && mode === "deterministic"} onSwitch={() => setMode("telelog")} />
+        <DeterministicMap active={active && mode === "deterministic"} onSwitch={setMode} />
       </div>
     </>
   );

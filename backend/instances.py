@@ -60,6 +60,12 @@ def _parse(raw: dict, index: int) -> Instance:
         raise InstanceError(f"instance '{raw['name']}': unknown feature(s) {unknown}; valid: {list(ALL_FEATURES)}")
     if "terminal" not in features:
         raise InstanceError(f"instance '{raw['name']}': 'terminal' is required")
+    disabled = tuple(raw.get("disable", ()))
+    if "terminal" in disabled or any(f not in ALL_FEATURES for f in disabled):
+        raise InstanceError(f"instance '{raw['name']}': 'disable' may only list optional features of {list(ALL_FEATURES)}")
+    if "map" not in features and "map" not in disabled:  # map is on by default; opt out with "disable": ["map"]
+        features += ("map",)
+    features = tuple(f for f in features if f not in disabled)
     return Instance(
         name=str(raw["name"]),
         project=os.path.abspath(str(raw["project"])),

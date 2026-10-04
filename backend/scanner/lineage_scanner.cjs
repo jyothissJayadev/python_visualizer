@@ -675,7 +675,7 @@ async function main() {
   // If endpoints not supplied, try fetching from running Brain Terminal API
   if (brainEndpoints.length === 0) {
     try {
-      const res = await fetch('http://127.0.0.1:8011/viewer/routes');
+      const res = await fetch((process.env.BRAIN_COLLECTOR_URL || 'http://127.0.0.1:24811') + '/viewer/routes');
       if (res.ok) {
         const data = await res.json();
         brainEndpoints = data.endpoints || (data.groups ? data.groups.flatMap(g => g.endpoints) : []);

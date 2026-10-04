@@ -61,7 +61,7 @@ Each **target** additionally needs the agent in its own venv — see
 ```json
 { "instances": [
   { "name": "arthur", "project": "/path/to/version_1.1/backend",
-    "backend_port": 8012, "frontend_port": 5178,
+    "backend_port": 24812, "frontend_port": 24822,
     "target_url": "http://127.0.0.1:8080", "features": ["terminal", "routes"] } ] }
 ```
 
@@ -71,21 +71,56 @@ Each **target** additionally needs the agent in its own venv — see
 | `project` | the target's root (the directory that contains its `app/` package) |
 | `backend_port` / `frontend_port` | this instance's collector and dashboard (must be unique across instances) |
 | `target_url` | the target's own base URL (what it reports as `VISUALIZER_SELF_URL`) |
-| `features` | tabs to offer: `terminal` (required), `routes`, `database`, `lineage`. `lineage` also gates the lineage scanner, which runs `node` and reads sibling apps |
+| `features` | tabs to offer: `terminal` (required), `routes`, `database`, `lineage`, `map` (on by default; opt out with `"disable": ["map"]`). `lineage` also gates the lineage scanner, which runs `node` and reads sibling apps |
 | `ignore` | extra directory names to skip while scanning |
 
 Current instances:
 
 | instance | collector | dashboard | tabs |
 |---|---|---|---|
-| atomics | 8011 | 5177 | terminal, routes, database, lineage |
-| arthur | 8012 | 5178 | terminal, routes |
+| atomics | 24811 | 24821 | terminal, routes, database, lineage |
+| arthur | 24812 | 24822 | terminal, routes |
 
 An instance is two processes on its own ports. Instances share no state: separate in-memory
 buffers and armed selections, per-project cache files under `.cache/`, and browser storage is per
 origin (port). Ports and names are validated at start-up (duplicates are rejected).
 
 ## Running
+
+**Start one instance on its own (visualizer only, no target):**
+
+```bash
+cd /run/media/jyothiss/main/code/python_visualizer
+.venv/bin/python -m backend.dev --instance atomics   # collector :24811, dashboard :24821
+.venv/bin/python -m backend.dev --instance arthur    # collector :24812, dashboard :24822
+```
+
+Then start the target itself with the env `--list` prints (e.g. atomics: `BRAIN_TELEMETRY_ENABLED=1
+BRAIN_TELEMETRY_SINK_URL=http://127.0.0.1:24811 BRAIN_TELEMETRY_SELF_URL=http://127.0.0.1:8000`;
+arthur: `VISUALIZER_ENABLED=1 VISUALIZER_SINK_URL=http://127.0.0.1:24812
+VISUALIZER_SELF_URL=http://127.0.0.1:8080`). Open the dashboard URL yourself.
+
+**Auto-start everything with `run atomics` / `run arthur`:**
+
+- `run` is a bash function in `~/.bashrc`. It runs `code <project>`, then waits for the instance's
+  dashboard port and opens it in the browser (`xdg-open`).
+- Each project's `.vscode/tasks.json` has tasks with `runOn: folderOpen` that start the target's
+  frontend, its backend, and the visualizer (`backend.dev --instance <name>`), each in its own
+  terminal of a shared group. Atomics: `atomics: frontend dev`, `atomics: brain server`,
+  `atomics: visualizer`. Arthur: `Arthur: all` (backend, frontend, brain telemetry).
+- VS Code only runs those tasks if `"task.allowAutomaticTasks": "on"` is set; each project's
+  `.vscode/settings.json` does that. If nothing starts, run *Tasks: Manage Automatic Tasks in
+  Folder* and allow them.
+- **Re-running restarts everything.** `run X` calls `scripts/run_project.sh X`, which kills the
+  listeners on that project's ports (visualizer collector + dashboard, and the target's
+  `target_ports` / `target_url` port, all from `instances.json`), closes the project's VS Code window
+  (needs `wmctrl` on X11), and reopens it so the tasks start fresh. The browser opens on a cold
+  start only. Without `wmctrl` (e.g. Wayland) the servers are stopped and you run *Developer: Reload
+  Window* in VS Code to restart the tasks. Preview with `scripts/run_project.sh <name> --dry-run`.
+- Visualizer ports (24811/24821 atomics, 24812/24822 arthur) are deliberately outside the common
+  dev ranges (3000, 5173, 8000, 8080) and below Linux's ephemeral range (32768+). Change them in
+  `instances.json`; add `workspace` and `target_ports` there for new instances.
+- Ports are fixed per instance (see the table above); if a start fails, check `ss -ltnp | grep -E ':(24811|24812|24821|24822)'` for a stale process on that port.
 
 **One command per instance (backend + frontend together):**
 
@@ -98,15 +133,15 @@ python -m backend.dev --instance atomics --instance arthur    # several (or --al
 - collector → `http://127.0.0.1:<backend_port>`; dashboard → `http://127.0.0.1:<frontend_port>`
   (a Vite dev server that proxies `/viewer/*`, HTTP + WebSocket, to *its own* collector).
 - Ctrl+C stops everything; if any process exits, the rest are shut down too.
-- Ad-hoc, without `instances.json`: `python -m backend.dev --project <root> [--backend-port 8011]
-  [--frontend-port 5177] [--ignore DIR_NAME ...]`.
+- Ad-hoc, without `instances.json`: `python -m backend.dev --project <root> [--backend-port 24811]
+  [--frontend-port 24821] [--ignore DIR_NAME ...]`.
 - Also installed as the `brain-terminal-dev` console script.
 
 **Run the pieces separately:**
 
 ```bash
-python -m backend.main --project <root> --port 8012 --name arthur --features terminal,routes
-cd frontend && VIZ_FRONTEND_PORT=5178 BRAIN_TERMINAL_BACKEND_PORT=8012 npm run dev -- --port 5178
+python -m backend.main --project <root> --port 24812 --name arthur --features terminal,routes
+cd frontend && VIZ_FRONTEND_PORT=24822 BRAIN_TERMINAL_BACKEND_PORT=24812 npm run dev -- --port 24822
 ```
 
 `backend.main` flags: `--host` / `--port`, `--ignore DIR_NAME` (repeatable), `--name`,
@@ -137,7 +172,7 @@ Start the target with the environment `python -m backend.dev --list` prints for 
 
 ```bash
 VISUALIZER_ENABLED=1 \
-VISUALIZER_SINK_URL=http://127.0.0.1:8012 \    # the instance's collector
+VISUALIZER_SINK_URL=http://127.0.0.1:24812 \    # the instance's collector
 VISUALIZER_SELF_URL=http://127.0.0.1:8080 \    # the target's own base URL
 ./run.sh
 ```
@@ -162,30 +197,30 @@ VISUALIZER_SELF_URL=http://127.0.0.1:8080 \    # the target's own base URL
 **atomics (brain)** currently still uses its own copies of `monitor.py`/`trace.py`/`telemetry.py`
 (`apps/brain/app/core/`, behind `BRAIN_TELEMETRY_ENABLED`); they speak the same protocol, so it works
 with the collector as before. Configure it with `BRAIN_TELEMETRY_ENABLED=1`,
-`BRAIN_TELEMETRY_SINK_URL=http://127.0.0.1:8011` and `BRAIN_TELEMETRY_SELF_URL=http://127.0.0.1:8000`
+`BRAIN_TELEMETRY_SINK_URL=http://127.0.0.1:24811` and `BRAIN_TELEMETRY_SELF_URL=http://127.0.0.1:8000`
 in the shell, or in `apps/brain/.env` (there `#` *is* a comment; `load_dotenv()` does not override a
 variable already set in the shell). Moving it onto the shared agent is optional and not done yet.
 
 ## MCP tools per instance
 
 The `brain-telemetry` MCP server (`python -m backend.mcp_server`) talks to **one** collector, chosen by
-`BRAIN_COLLECTOR_URL` (default `http://127.0.0.1:8011`). With several instances, register one MCP
+`BRAIN_COLLECTOR_URL` (default `http://127.0.0.1:24811`). With several instances, register one MCP
 server per instance, each pointing at its own collector. `.mcp.json` ships with:
 
 | MCP server | collector | instance |
 |---|---|---|
-| `brain-telemetry-atomics` | `http://127.0.0.1:8011` | atomics |
-| `brain-telemetry-arthur` | `http://127.0.0.1:8012` | arthur |
+| `brain-telemetry-atomics` | `http://127.0.0.1:24811` | atomics |
+| `brain-telemetry-arthur` | `http://127.0.0.1:24812` | arthur |
 
 ```json
 "brain-telemetry-arthur": {
   "command": ".venv/bin/python",
   "args": ["-m", "backend.mcp_server"],
-  "env": { "BRAIN_COLLECTOR_URL": "http://127.0.0.1:8012" }
+  "env": { "BRAIN_COLLECTOR_URL": "http://127.0.0.1:24812" }
 }
 ```
 
-Or from the shell: `claude mcp add brain-telemetry-arthur -e BRAIN_COLLECTOR_URL=http://127.0.0.1:8012 -- .venv/bin/python -m backend.mcp_server`.
+Or from the shell: `claude mcp add brain-telemetry-arthur -e BRAIN_COLLECTOR_URL=http://127.0.0.1:24812 -- .venv/bin/python -m backend.mcp_server`.
 The tools appear namespaced by server name (`mcp__brain-telemetry-arthur__arm_functions`, ...), so
 pick the server that matches the target you are debugging. Restart Claude Code after editing `.mcp.json`.
 
@@ -196,6 +231,11 @@ function (role, feature, parent, purpose, data in and out, DB tables); the **Tel
 reads them and shows features, flows, ordered steps and live sample values. The **Deterministic** view stays one
 click away. Tags are comments only: nothing is imported or executed, and the visualizer never edits your code.
 
+- **Views:** **City** (default; features are districts, modules are buildings with rooms, tables are vaults,
+  streets between buildings are the real function calls that cross them, endpoint flows are highways with a
+  gate where each begins, plus guided tours and a day/night map). Select an endpoint and press **Run flow** to
+  watch its call order play down through the lower functions (a walkthrough of the code's call order, not a live trace), **Flows** (step-by-step drill-down with the data
+  passed between steps) and **Deterministic** (what the code does). The City look follows `project_map.html`.
 - **Tag format and audit rules:** `telelog/SKILL.md` (the Claude Code skill; run `/telelog` to tag a project).
 - **Install in a target:** `telelog/INSTALL.md` (MCP server entry, skill, edit hook, `.telelog/` config).
 - **Tools:** `list_untagged`, `get_function`, `get_feature_tree`, `validate_tags`, `suggest_parent`,

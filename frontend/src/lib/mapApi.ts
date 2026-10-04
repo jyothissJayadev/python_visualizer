@@ -119,6 +119,25 @@ export interface TagField {
   source: string | null;
 }
 
+export interface EndpointInfo {
+  id: string;
+  method: string;
+  path: string;
+  status_code: string | null;
+  response_model: string | null;
+  dependencies: string[];
+  summary: string | null;
+}
+
+export interface EntryPoint {
+  id: string;
+  kind: string;
+  framework: string | null;
+  module: string;
+  file_path: string | null;
+  line: number | null;
+}
+
 export interface TelelogFn {
   id: string;
   role: "main" | "sub" | "helper" | null;
@@ -134,8 +153,11 @@ export interface TelelogFn {
   status: TagStatus;
   tables: string[];
   routes: string[];
+  endpoints: EndpointInfo[];
   line: number | null;
   file: string | null;
+  module: string;
+  signature: string | null;
 }
 
 export interface TelelogFeature {
@@ -151,6 +173,12 @@ export interface TelelogMapData {
   functions: Record<string, TelelogFn>;
   children: Record<string, string[]>;
   untagged: Record<string, string[]>;
+  /** module -> source file, for every module that has functions */
+  files: Record<string, string>;
+  entry_points: EntryPoint[];
+  endpoint_count: number;
+  /** caller id -> direct calls to other tagged functions (call sites counted) */
+  calls: Record<string, { to: string; n: number; edge: string }[]>;
   coverage: { tagged: number; total: number; stale: number; invalid: number };
 }
 
@@ -167,7 +195,34 @@ export interface LiveValues {
   outputs: Record<string, LiveField>;
 }
 
+export interface FlowStep {
+  i: number;
+  kind: "fn" | "db" | "external";
+  id: string;
+  depth: number;
+  parent: number | null;
+  edge: string;
+  line: number | null;
+  expr: string | null;
+  repeat: boolean;
+  recursive: boolean;
+}
+
+export interface FlowData {
+  handler: string;
+  route: string | null;
+  steps: FlowStep[];
+  truncated: boolean;
+}
+
 export const telelogApi = {
   map: () => fetch("/viewer/telelog/map").then((r) => json<TelelogMapData>(r)),
+  /** the order an endpoint's code runs in, depth first */
+  flow: (id: string) => fetch(`/viewer/telelog/flow?${new URLSearchParams({ id })}`).then((r) => json<FlowData>(r)),
+  /** capped source of one function, for the code preview */
+  source: (id: string) =>
+    fetch(`/viewer/telelog/function?${new URLSearchParams({ ids: id })}`)
+      .then((r) => json<{ source?: { text: string; truncated: boolean } }[]>(r))
+      .then((a) => a[0]?.source ?? null),
   live: (id: string) => fetch(`/viewer/telelog/live?${new URLSearchParams({ id })}`).then((r) => json<LiveValues>(r)),
 };

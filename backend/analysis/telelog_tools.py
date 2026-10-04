@@ -11,6 +11,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from backend.analysis.callgraph import N
+from backend.analysis.mapmodel import _entry_points
 from backend.analysis.telelog import (
     ParseResult,
     Tag,
@@ -190,15 +192,21 @@ def telelog_payload(analysis, parsed: dict[str, ParseResult], verified: dict[str
         if i.id and i.code != "missing-tag":
             bad[i.id] = "invalid"
     routes: dict[str, list[str]] = {}
+    endpoints: dict[str, list[dict[str, Any]]] = {}
     for ep in analysis.routes.endpoints:
         routes.setdefault(ep.handler_id, []).append(f"{ep.method} {ep.path}")
+        endpoints.setdefault(ep.handler_id, []).append({
+            "id": ep.id, "method": ep.method, "path": ep.path, "status_code": ep.status_code,
+            "response_model": ep.response_model, "dependencies": ep.dependencies, "summary": ep.summary,
+        })
     reg = analysis.registry.funcs
     functions: dict[str, Any] = {}
     for fid, tag in tags.items():
         f = reg.get(fid)
         d = tag_dict(tag) or {}
         d.update({"id": fid, "status": bad.get(fid, "ok"), "tables": sorted(info.tables.get(fid, ())),
-                  "routes": routes.get(fid, []), "line": f.line if f else None, "file": f.file_path if f else None})
+                  "routes": routes.get(fid, []), "endpoints": endpoints.get(fid, []), "line": f.line if f else None, "file": f.file_path if f else None,
+                  "module": f.module if f else fid.split(":", 1)[0], "signature": f"{f.name}{f.signature}" if f else None})
         functions[fid] = d
     feats: dict[str, dict[str, Any]] = {}
     for fid, d in functions.items():
@@ -220,7 +228,9 @@ def telelog_payload(analysis, parsed: dict[str, ParseResult], verified: dict[str
     for kids in children.values():
         kids.sort(key=lambda k: (functions[k]["n"] if functions[k]["n"] is not None else 10**6, k))
     untagged: dict[str, list[str]] = {}
+    files: dict[str, str] = {}
     for fid, f in reg.items():
+        files.setdefault(f.module, f.file_path)
         if fid in tags or (exclude is not None and exclude(f)):
             continue
         untagged.setdefault(f.module, []).append(fid)
@@ -229,9 +239,106 @@ def telelog_payload(analysis, parsed: dict[str, ParseResult], verified: dict[str
         "functions": functions,
         "children": children,
         "untagged": {m: sorted(v) for m, v in sorted(untagged.items())},
+        "files": files,
+        "calls": function_calls(analysis, functions),
+        "entry_points": [
+            {k: e.get(k) for k in ("id", "kind", "framework", "module", "file_path", "line")} for e in _entry_points(analysis)
+        ],
+        "endpoint_count": len(analysis.routes.endpoints),
         "coverage": {
             "tagged": len(tags), "total": report.functions,
             "stale": sum(1 for v in bad.values() if v == "stale"),
             "invalid": sum(1 for v in bad.values() if v == "invalid"),
         },
     }
+
+
+_DISSOLVE = ("loop", "branch", "arm", "graph", "dispatch")
+
+
+def _direct_callees(nodes: list[N], out: list[N]) -> None:
+    """The project functions a function calls itself: control-flow wrappers are looked through, calls made
+    further down (by the callees) are not."""
+    for n in nodes:
+        if n.kind == "function" and n.function_id:
+            out.append(n)
+        elif n.kind in _DISSOLVE:
+            _direct_callees(n.children, out)
+
+
+def function_calls(analysis, ids: Iterable[str]) -> dict[str, list[dict[str, Any]]]:
+    """caller id -> [{to, n, edge}] for direct calls between the given functions (call sites counted)."""
+    wanted = set(ids)
+    cg = analysis.callgraph
+    out: dict[str, list[dict[str, Any]]] = {}
+    for fid in sorted(wanted):
+        if fid not in analysis.registry.funcs:
+            continue
+        try:
+            kids, _ = cg._expand_function(fid, {}, ())
+        except Exception:  # noqa: BLE001 — one unanalysable function must not hide every other connection
+            continue
+        direct: list[N] = []
+        _direct_callees(kids, direct)
+        by: dict[str, dict[str, Any]] = {}
+        for c in direct:
+            cid = c.function_id
+            if cid in wanted and cid != fid:
+                e = by.setdefault(cid, {"to": cid, "n": 0, "edge": c.edge})
+                e["n"] += 1
+        if by:
+            out[fid] = sorted(by.values(), key=lambda e: e["to"])
+    return out
+
+
+MAX_FLOW_STEPS = 260
+
+
+def flow_steps(analysis, handler_id: str, max_steps: int = MAX_FLOW_STEPS) -> dict[str, Any] | None:
+    """The order things run in when an endpoint is called: its handler, then every function it calls, depth first, in
+    the order the calls appear in the source. A function reached a second time is listed again but not re-expanded
+    (marked `repeat`), so the walk stays readable. Database access and library calls appear as leaf steps."""
+    cg = analysis.callgraph
+    ep = next((e for e in analysis.routes.endpoints if e.handler_id == handler_id), None)
+    root = cg.endpoint_root(ep) if ep is not None else None
+    if root is None and handler_id in analysis.registry.funcs:
+        try:
+            root = cg._function_node(handler_id, {}, (), set(), "call", None, None)
+        except Exception:  # noqa: BLE001
+            root = None
+    if root is None:
+        return None
+    steps: list[dict[str, Any]] = []
+    expanded: set[str] = set()
+    truncated = False
+
+    def add(step: dict[str, Any]) -> int:
+        step["i"] = len(steps)
+        steps.append(step)
+        return step["i"]
+
+    def walk(n: N, depth: int, parent: int | None) -> None:
+        nonlocal truncated
+        if len(steps) >= max_steps:
+            truncated = True
+            return
+        if n.kind == "function" and n.function_id:
+            repeat = n.function_id in expanded or n.cyclic
+            i = add({"kind": "fn", "id": n.function_id, "depth": depth, "parent": parent, "edge": n.edge, "line": n.call_line,
+                     "expr": n.call_expr, "repeat": repeat, "recursive": bool(n.cyclic)})
+            expanded.add(n.function_id)
+            if not repeat:
+                for c in n.children:
+                    walk(c, depth + 1, i)
+        elif n.kind in _DISSOLVE:
+            for c in n.children:
+                walk(c, depth, parent)
+        elif n.kind == "db":
+            add({"kind": "db", "id": n.name, "depth": depth, "parent": parent, "edge": n.edge, "line": n.call_line,
+                 "expr": n.call_expr, "repeat": False, "recursive": False})
+        elif n.kind == "external" and n.external:
+            add({"kind": "external", "id": n.external, "depth": depth, "parent": parent, "edge": n.edge, "line": n.call_line,
+                 "expr": n.call_expr, "repeat": False, "recursive": False})
+
+    walk(root, 0, None)
+    return {"handler": handler_id, "route": root.label, "steps": steps, "truncated": truncated}

@@ -13,15 +13,17 @@ import {
 } from "../../lib/telelogLayout";
 import { useRoutesValue } from "../../lib/useRoutes";
 
-type Mode = "telelog" | "deterministic";
+export type Mode = "city" | "flows" | "deterministic";
 interface View { x: number; y: number; k: number }
+
+const MODE_LABEL: Record<Mode, string> = { city: "City", flows: "Flows", deterministic: "Deterministic" };
 
 export function ViewSwitch({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => void }) {
   return (
     <div className="tl-switch" role="group" aria-label="Map view">
-      {(["telelog", "deterministic"] as const).map((m) => (
+      {(["city", "flows", "deterministic"] as const).map((m) => (
         <button key={m} type="button" aria-pressed={mode === m} className={mode === m ? "on" : ""} onClick={() => onChange(m)}>
-          {m === "telelog" ? "Telelog" : "Deterministic"}
+          {MODE_LABEL[m]}
         </button>
       ))}
     </div>
@@ -35,7 +37,7 @@ function LiveCell({ field }: { field: LiveField | undefined }) {
   return <code className="tl-val">{field.value}</code>;
 }
 
-function FieldTable({ title, fields, live }: { title: string; fields: TagField[] | null; live: Record<string, LiveField> | undefined }) {
+export function FieldTable({ title, fields, live }: { title: string; fields: TagField[] | null; live: Record<string, LiveField> | undefined }) {
   return (
     <>
       <h4>{title}</h4>
@@ -58,7 +60,7 @@ function FieldTable({ title, fields, live }: { title: string; fields: TagField[]
   );
 }
 
-function StatusBadge({ health }: { health: Health }) {
+export function StatusBadge({ health }: { health: Health }) {
   if (health === "ok") return <span className="tl-health tl-health-ok">tag ok</span>;
   const text = health === "untagged" ? "untagged" : health;
   const title =
@@ -128,7 +130,7 @@ function Panel({ id, data, live, onJump, onClose }: {
   );
 }
 
-export function TelelogMap({ active, onSwitch }: { active: boolean; onSwitch: () => void }) {
+export function TelelogMap({ active, onSwitch }: { active: boolean; onSwitch: (m: Mode) => void }) {
   const [data, setData] = useState<TelelogMapData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [level, setLevel] = useState<Level>({ kind: "project" });
@@ -294,7 +296,7 @@ export function TelelogMap({ active, onSwitch }: { active: boolean; onSwitch: ()
     <div className="mp-workspace" onKeyDown={onKeyDown}>
       <div className="mp-canvas-wrap tl-canvas" ref={wrapRef}>
         <div className="mp-toolbar tl-toolbar">
-          <ViewSwitch mode="telelog" onChange={(m) => m === "deterministic" && onSwitch()} />
+          <ViewSwitch mode="flows" onChange={onSwitch} />
           <nav className="tl-crumbs" aria-label="Breadcrumb">
             {crumbList.map((c, i) => (
               <span key={`${i}${c.label}`}>
@@ -352,7 +354,7 @@ export function TelelogMap({ active, onSwitch }: { active: boolean; onSwitch: ()
         {cov && cov.tagged === 0 && (
           <div className="tl-banner" role="status">
             No telelog tags yet. Run <code>/telelog</code> in Claude Code.
-            <button type="button" className="btn-sm" onClick={onSwitch}>Open Deterministic view</button>
+            <button type="button" className="btn-sm" onClick={() => onSwitch("deterministic")}>Open Deterministic view</button>
           </div>
         )}
         {error && <div className="mp-empty">Telelog map not available: {error}. The analysis may still be running.</div>}

@@ -27,8 +27,8 @@ def test_shipped_instances_file_is_valid_and_ports_are_distinct():
     assert {"atomics", "arthur"} <= set(inst)
     ports = [p for i in inst.values() for p in (i.backend_port, i.frontend_port)]
     assert len(ports) == len(set(ports))
-    assert inst["atomics"].backend_port == 8011 and inst["atomics"].frontend_port == 5177   # unchanged defaults
-    assert set(inst["arthur"].features) == {"terminal", "routes"}
+    assert inst["atomics"].backend_port == 24811 and inst["atomics"].frontend_port == 24821   # unchanged defaults
+    assert set(inst["arthur"].features) == {"terminal", "routes", "map"}
 
 
 def test_env_for_target_points_at_this_instances_collector():
@@ -64,13 +64,13 @@ def test_launcher_commands_use_each_instances_own_ports_and_features():
     inst = load_instances()
     a, b = inst["atomics"], inst["arthur"]
     cmd = dev.backend_command(b)
-    assert cmd[cmd.index("--port") + 1] == "8012" and cmd[cmd.index("--name") + 1] == "arthur"
-    assert cmd[cmd.index("--features") + 1] == "terminal,routes"
+    assert cmd[cmd.index("--port") + 1] == "24812" and cmd[cmd.index("--name") + 1] == "arthur"
+    assert cmd[cmd.index("--features") + 1] == "terminal,routes,map"
     fcmd = dev.frontend_command(b)
-    assert fcmd[fcmd.index("--port") + 1] == "5178" and "--strictPort" in fcmd
-    assert dev.frontend_env(a)["BRAIN_TERMINAL_BACKEND_PORT"] == "8011"
-    assert dev.frontend_env(b)["BRAIN_TERMINAL_BACKEND_PORT"] == "8012"
-    assert dev.frontend_env(b)["VIZ_FRONTEND_PORT"] == "5178"
+    assert fcmd[fcmd.index("--port") + 1] == "24822" and "--strictPort" in fcmd
+    assert dev.frontend_env(a)["BRAIN_TERMINAL_BACKEND_PORT"] == "24811"
+    assert dev.frontend_env(b)["BRAIN_TERMINAL_BACKEND_PORT"] == "24812"
+    assert dev.frontend_env(b)["VIZ_FRONTEND_PORT"] == "24822"
 
 
 def test_launcher_resolution(capsys):
@@ -105,7 +105,7 @@ def test_seed_script_is_idempotent_against_a_collector(tmp_path, monkeypatch):
                      analyze_on_start=False)
     with TestClient(app) as client:
         def fake_post(url, body):
-            r = client.post(url.replace("http://127.0.0.1:8012", ""), json=body)
+            r = client.post(url.replace("http://127.0.0.1:24812", ""), json=body)
             return r.status_code, r.json()
         monkeypatch.setattr(seed, "post", fake_post)
         f = tmp_path / "t.json"
@@ -114,3 +114,17 @@ def test_seed_script_is_idempotent_against_a_collector(tmp_path, monkeypatch):
         assert seed.main(["--instance", "arthur", "--file", str(f)]) == 0
         names = [t["name"] for t in client.get("/viewer/terminal/templates").json()["templates"]]
     assert names == ["one"]
+
+
+def test_map_enabled_by_default_and_opt_out(tmp_path):
+    import json
+    from backend.instances import load_instances
+
+    def load(extra):
+        f = tmp_path / "i.json"
+        f.write_text(json.dumps({"instances": [{"name": "a", "project": ".", "backend_port": 1, "frontend_port": 2,
+                                                 "features": ["terminal", "routes"], **extra}]}))
+        return load_instances(f)["a"].features
+
+    assert "map" in load({})
+    assert "map" not in load({"disable": ["map"]})

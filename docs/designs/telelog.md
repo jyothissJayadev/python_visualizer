@@ -426,6 +426,22 @@ Decisions (D1 focus: all seven dimensions; D2-D9 below, all recommended options)
 
 None generated (designer unavailable: no OpenAI API key). Re-run after `$HOME/.claude/skills/gstack/design/dist/design setup`.
 
+## Post-review change: City view
+
+After the reviews, the reference `project_map.html` (found in the Arthur repo) showed the intended look: a spatial
+city, not a drill-down diagram. Decision (user, "add City as a third view"): City is now the default Map view,
+Flows is the former Telelog drill-down, Deterministic is unchanged. Mapping: feature = district, module holding
+tagged code = building (functions = rooms), flow = highway, table = vault, flow steps = guided tour. Layout is
+automatic (`frontend/src/lib/cityLayout.ts`). Decisions D2-D9 above still apply to Flows; the side panel, keyboard
+model and live-value redaction are shared. Later additions: endpoint gates and an API Gateway entry building;
+streets (one per building pair, width by call count, two-way merged) built from direct function-to-function calls
+(`calls` in the payload), with endpoint highways drawn along them and function-pair labels on the streets of the
+selected building or room. Streets are routed through the gaps between buildings. **Run flow**: select an endpoint,
+press Run flow, and a marker plays the endpoint's call order (`/viewer/telelog/flow`, depth first, repeats marked,
+library and database calls as leaf steps) down through the lower functions, with a trail on the streets and a call
+stack. It is the code's static call order, not a live trace. Not done: human `title=` names and feature descriptions (derived
+from purposes for now), traffic driven by real traces, and a frontend test runner (`TODOS.md`).
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
