@@ -410,6 +410,84 @@ async def pin_function(function_id: str, role: str = "") -> dict[str, Any]:
         return {"error": f"Failed to pin: {_explain(exc)}"}
 
 
+# ── telelog: the human-meaning layer (see docs/designs/telelog.md) ──────────
+
+async def _telelog(path: str, params: dict | None = None, what: str = "telelog call") -> Any:
+    try:
+        return await _fetch_get(path, params=params)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"Failed {what}: {_explain(exc)}"}
+
+
+@mcp.tool()
+async def list_untagged(limit: int = 15, cursor: str = "", feature: str = "") -> dict[str, Any]:
+    """A page of functions with no `@telelog` tag: endpoint handlers first, then their direct callees, then
+    the rest. Each item has role hints (endpoint / db-touching / high-fan-in). Pass `next_cursor` back as
+    `cursor` for the next page; it stays valid while you tag. Never scan the repo by reading files instead.
+
+    Args:
+        limit: Page size (1-100).
+        cursor: The `next_cursor` of the previous page.
+        feature: Only functions next to a function already tagged with this feature.
+    """
+    params: dict[str, Any] = {"limit": limit}
+    if cursor:
+        params["cursor"] = cursor
+    if feature:
+        params["feature"] = feature
+    return await _telelog("/viewer/telelog/untagged", params, "listing untagged functions")
+
+
+@mcp.tool()
+async def get_function(ids: list[str]) -> Any:
+    """What you need to tag functions and nothing more: capped source, signature, route, callers, callees,
+    database tables, the existing tag (if any) and features of neighbouring tagged functions. Max 25 ids."""
+    return await _telelog("/viewer/telelog/function", {"ids": ids[:25]}, "getting functions")
+
+
+@mcp.tool()
+async def get_feature_tree() -> dict[str, Any]:
+    """Existing features with their main functions. Reuse these names; do not invent near-duplicates."""
+    return await _telelog("/viewer/telelog/features", None, "getting the feature tree")
+
+
+@mcp.tool()
+async def validate_tags() -> dict[str, Any]:
+    """Check every tag against the code. Errors: missing/orphan/duplicate/unbound tag, unknown parent, parent
+    cycle, bad or missing field, over-cap, unknown source. Warnings: stale (body changed since verified),
+    renamed (same body, new id), `purpose: ?`. Returns counts per code plus the first issues."""
+    return await _telelog("/viewer/telelog/validate", None, "validating tags")
+
+
+@mcp.tool()
+async def suggest_parent(function_id: str) -> Any:
+    """Candidate human parents for a function: tagged functions that call it, nearest first."""
+    return await _telelog("/viewer/telelog/parent", {"id": function_id}, "suggesting a parent")
+
+
+@mcp.tool()
+async def check_changed(paths: list[str]) -> dict[str, Any]:
+    """For the edit hook: tagged functions in these files whose body changed since their tag was last
+    verified, and functions in them with no tag. Refresh those tags, then call record_progress with their ids."""
+    return await _telelog("/viewer/telelog/changed", {"paths": paths}, "checking changed files")
+
+
+@mcp.tool()
+async def record_progress(ids: list[str]) -> dict[str, Any]:
+    """Mark functions as handled by the audit so an interrupted run resumes where it stopped. Tagged ids
+    also become verified against their current body (clears `stale` and the hook's changed-list)."""
+    try:
+        return await _fetch_post("/viewer/telelog/progress", {"ids": ids})
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"Failed recording progress: {_explain(exc)}"}
+
+
+@mcp.tool()
+async def get_progress() -> dict[str, Any]:
+    """Ids the current audit has already handled."""
+    return await _telelog("/viewer/telelog/progress", None, "getting progress")
+
+
 @mcp.tool()
 async def get_function_io(request_id: str, span_id: str, field: str = "result") -> dict[str, Any]:
     """Fetch untruncated runtime input arguments, return value, or exception traceback for a specific span.

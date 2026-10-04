@@ -108,3 +108,66 @@ export const mapApi = {
       body: JSON.stringify({ id, role }),
     }).then((r) => json<Record<string, string>>(r)),
 };
+
+/* ── telelog (backend/api/telelog.py) ── */
+
+export type TagStatus = "ok" | "stale" | "invalid";
+
+export interface TagField {
+  name: string;
+  optional: boolean;
+  source: string | null;
+}
+
+export interface TelelogFn {
+  id: string;
+  role: "main" | "sub" | "helper" | null;
+  feature: string | null;
+  parent: string | null;
+  n: number | null;
+  purpose: string | null;
+  inputs: TagField[] | null;
+  outputs: TagField[] | null;
+  db: { table: string; mode: string }[] | null;
+  algo: string[] | null;
+  problems: { code: string; message: string; line: number }[];
+  status: TagStatus;
+  tables: string[];
+  routes: string[];
+  line: number | null;
+  file: string | null;
+}
+
+export interface TelelogFeature {
+  name: string;
+  mains: string[];
+  functions: number;
+  endpoints: number;
+  tables: string[];
+}
+
+export interface TelelogMapData {
+  features: TelelogFeature[];
+  functions: Record<string, TelelogFn>;
+  children: Record<string, string[]>;
+  untagged: Record<string, string[]>;
+  coverage: { tagged: number; total: number; stale: number; invalid: number };
+}
+
+export interface LiveField {
+  state: "sample" | "no-sample" | "redacted";
+  value?: string;
+}
+
+export interface LiveValues {
+  status: "ok" | "no-trace";
+  request_id?: string;
+  ts?: number;
+  inputs: Record<string, LiveField>;
+  outputs: Record<string, LiveField>;
+}
+
+export const telelogApi = {
+  map: () => fetch("/viewer/telelog/map").then((r) => json<TelelogMapData>(r)),
+  live: (id: string) => fetch(`/viewer/telelog/live?${new URLSearchParams({ id })}`).then((r) => json<LiveValues>(r)),
+};

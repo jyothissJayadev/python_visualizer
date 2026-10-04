@@ -87,3 +87,74 @@
 .mp-pin { display: flex; gap: 8px; margin-top: 12px; }
 .tab-theme-map { background: var(--accent-amber-bg); }
 .tabs-slider-btn.active-map { color: var(--accent-amber); }
+
+/* TELELOG VIEW — `tl-` prefix; tokens from terminal.css. Role = shape and weight, colour = health only. */
+.tl-pane { flex: 1; width: 100%; height: 100%; min-width: 0; }
+.tl-toolbar { flex-wrap: wrap; row-gap: 6px; }
+.tl-switch { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--radius-md); overflow: hidden; }
+.tl-switch button { background: none; border: 0; padding: 4px 10px; color: var(--text-secondary); font: 600 12px var(--font-sans); cursor: pointer; }
+.tl-switch button.on { background: var(--accent-cyan-bg); color: var(--accent-cyan); }
+.tl-switch button:focus-visible, .tl-chip:focus-visible, .mp-link:focus-visible { outline: 2px solid var(--accent-cyan); outline-offset: 2px; }
+.tl-crumbs { font: 12px var(--font-mono); color: var(--text-secondary); white-space: nowrap; }
+.tl-crumb-now { color: var(--text-primary); font-weight: 600; }
+.tl-sep { color: var(--text-muted); }
+.tl-chips { display: inline-flex; gap: 6px; }
+.tl-chip { background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: 99px; padding: 2px 10px; color: var(--text-secondary); font: 600 11px var(--font-mono); cursor: pointer; }
+.tl-chip.on { border-color: var(--accent-cyan); color: var(--accent-cyan); }
+.tl-chip-stale { color: var(--accent-amber); }
+.tl-chip-invalid { color: var(--accent-rose); }
+.tl-banner { position: absolute; top: 56px; left: 10px; right: 10px; z-index: 4; display: flex; align-items: center; gap: 12px; padding: 8px 12px;
+  background: var(--accent-amber-bg); border: 1px solid var(--accent-amber-border); border-radius: var(--radius-md); color: var(--text-primary); font-size: 12px; }
+.tl-banner code, .tl-note code { font-family: var(--font-mono); color: var(--accent-cyan); }
+.tl-hint { position: absolute; left: 12px; bottom: 10px; color: var(--text-secondary); font-size: 11px; pointer-events: none; }
+
+.tl-node { cursor: pointer; outline: none; }
+.tl-node rect { fill: var(--bg-surface); stroke: var(--border-strong); stroke-width: 1.2; }
+.tl-node:hover rect { fill: var(--bg-surface-hover); }
+.tl-node:focus-visible rect { stroke: var(--accent-cyan); stroke-width: 3; }
+.tl-node.selected rect { stroke: var(--accent-cyan); stroke-width: 2.4; fill: var(--bg-surface-active); }
+.tl-node.dim { opacity: .3; }
+.tl-main rect { stroke: var(--text-secondary); stroke-width: 2; }
+.tl-main .tl-label { font-weight: 700; }
+.tl-helper rect, .tl-table rect, .tl-external rect { stroke-dasharray: 4 3; fill: var(--bg-panel); }
+.tl-table rect { stroke: var(--accent-emerald); stroke-dasharray: none; }
+.tl-external rect { stroke: var(--accent-violet); stroke-dasharray: none; }
+.tl-untagged rect { stroke-dasharray: 5 4; stroke-opacity: .7; }
+.tl-label { fill: var(--text-primary); font: 600 13px var(--font-mono); }
+.tl-sub { fill: var(--text-secondary); font: 11px var(--font-sans); }
+.tl-detail-line { fill: var(--text-secondary); font: 11px var(--font-mono); }
+.tl-q { fill: var(--text-secondary); font: 700 16px var(--font-mono); }
+.tl-badge { font: 700 10px var(--font-mono); text-transform: uppercase; }
+.tl-badge-stale { fill: var(--accent-amber); }
+.tl-badge-invalid { fill: var(--accent-rose); }
+.tl-group { fill: none; stroke: var(--border-strong); stroke-dasharray: 2 4; }
+.tl-edge-label rect { fill: var(--bg-panel); stroke: var(--border-subtle); }
+.tl-edge-label text { fill: var(--text-secondary); font: 11px var(--font-mono); }
+
+.tl-role { padding: 1px 7px; border-radius: 99px; font: 600 10px var(--font-mono); text-transform: uppercase; background: var(--bg-surface-active); color: var(--text-primary); }
+.tl-role-main { box-shadow: inset 0 0 0 2px var(--text-secondary); }
+.tl-role-helper { box-shadow: inset 0 0 0 1px var(--text-muted); }
+.tl-health { padding: 1px 7px; border-radius: 99px; font: 600 10px var(--font-mono); text-transform: uppercase; }
+.tl-health-ok { color: var(--text-secondary); background: var(--bg-surface-active); }
+.tl-health-stale { color: var(--accent-amber); background: var(--accent-amber-bg); }
+.tl-health-invalid { color: var(--accent-rose); background: var(--bg-surface-active); }
+.tl-health-untagged { color: var(--text-secondary); border: 1px dashed var(--border-strong); }
+.tl-note { margin: 8px 0; color: var(--text-secondary); font-size: 12px; }
+.tl-parent { margin: 0 0 8px; color: var(--text-secondary); font-size: 12px; }
+.tl-problems { margin: 4px 0 8px; padding-left: 18px; color: var(--accent-rose); font-size: 12px; }
+.tl-fields { width: 100%; border-collapse: collapse; font-size: 12px; }
+.tl-fields td { padding: 3px 6px 3px 0; vertical-align: top; }
+.tl-fname { font-family: var(--font-mono); color: var(--text-primary); white-space: nowrap; }
+.tl-fsrc { color: var(--text-secondary); }
+.tl-val { font: 11px var(--font-mono); color: var(--accent-cyan); word-break: break-all; }
+.tl-val-none, .tl-val-redacted { color: var(--text-secondary); font-family: var(--font-sans); }
+.tl-val-redacted { font-style: italic; }
+.tl-algo { margin: 0; padding-left: 20px; color: var(--text-primary); font-size: 12px; line-height: 1.6; }
+
+/* narrow windows (a half-width browser beside a terminal): the detail panel becomes a drawer over the canvas */
+@media (max-width: 999px) {
+  .tl-pane .mp-workspace { position: relative; }
+  .tl-pane .tl-detail { position: absolute; top: 0; right: 0; bottom: 0; width: min(380px, 92%); z-index: 8; box-shadow: -8px 0 16px rgba(0, 0, 0, .5); }
+}
+.mp-toolbar { flex-wrap: wrap; row-gap: 6px; }
+.tl-switch { flex: none; }

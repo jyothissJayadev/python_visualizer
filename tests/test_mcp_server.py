@@ -261,3 +261,46 @@ async def test_mcp_get_map_is_compact_and_filters_by_module():
         res = await get_map(module="b.y")
         assert [m["module"] for m in res["modules"]] == ["b.y"]
         assert res["links"] == ["a.x:f -> b.y:g"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_telelog_tools_call_the_right_endpoints():
+    from backend import mcp_server as m
+
+    with patch("backend.mcp_server._fetch_get", new_callable=AsyncMock) as get, \
+         patch("backend.mcp_server._fetch_post", new_callable=AsyncMock) as post:
+        get.return_value = {"ok": True}
+        post.return_value = {"count": 1}
+        await m.list_untagged(limit=5)
+        get.assert_called_with("/viewer/telelog/untagged", params={"limit": 5})
+        await m.list_untagged(limit=5, cursor="1:a:b", feature="Checkout")
+        get.assert_called_with("/viewer/telelog/untagged", params={"limit": 5, "cursor": "1:a:b", "feature": "Checkout"})
+        await m.get_function(["a:f", "a:g"])
+        get.assert_called_with("/viewer/telelog/function", params={"ids": ["a:f", "a:g"]})
+        await m.get_function([f"a:f{i}" for i in range(40)])
+        assert len(get.call_args.kwargs["params"]["ids"]) == 25  # capped
+        await m.get_feature_tree()
+        get.assert_called_with("/viewer/telelog/features", params=None)
+        await m.validate_tags()
+        get.assert_called_with("/viewer/telelog/validate", params=None)
+        await m.suggest_parent("a:f")
+        get.assert_called_with("/viewer/telelog/parent", params={"id": "a:f"})
+        await m.check_changed(["app/x.py"])
+        get.assert_called_with("/viewer/telelog/changed", params={"paths": ["app/x.py"]})
+        await m.get_progress()
+        get.assert_called_with("/viewer/telelog/progress", params=None)
+        assert await m.record_progress(["a:f"]) == {"count": 1}
+        post.assert_called_with("/viewer/telelog/progress", {"ids": ["a:f"]})
+
+
+@pytest.mark.asyncio
+async def test_mcp_telelog_tools_report_collector_errors():
+    from backend import mcp_server as m
+    import httpx
+
+    with patch("backend.mcp_server._fetch_get", new_callable=AsyncMock) as get, \
+         patch("backend.mcp_server._fetch_post", new_callable=AsyncMock) as post:
+        get.side_effect = httpx.ConnectError("down")
+        post.side_effect = httpx.ConnectError("down")
+        for res in (await m.validate_tags(), await m.list_untagged(), await m.record_progress(["a:f"])):
+            assert "error" in res and "collector" in res["error"].lower()

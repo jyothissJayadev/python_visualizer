@@ -20,6 +20,9 @@ from pydantic import BaseModel
 from backend.analysis.algorithm import AlgorithmStore, card, skeleton
 from backend.analysis.mapmodel import build_map
 from backend.analysis.service import AnalysisService
+from backend.analysis.telelog import read_tags, tagged_function_ids
+from backend.analysis.telelog_store import TelelogStore, load_config
+from backend.analysis.telelog_tools import telelog_payload
 
 router = APIRouter(prefix="/viewer/map", tags=["map"])
 
@@ -55,7 +58,15 @@ def _analysis(svc: AnalysisService):
 @router.get("")
 async def get_map(request: Request) -> dict[str, Any]:
     svc = _service(request)
-    return build_map(_analysis(svc), _load_overrides(svc))
+    analysis = _analysis(svc)
+    root = Path(svc.project_path)
+    parsed = read_tags(analysis)
+    tags = tagged_function_ids(parsed)
+    m = build_map(analysis, _load_overrides(svc), tags)
+    if tags:  # no tags: the payload is exactly the deterministic map (see tests/analysis/test_map_golden.py)
+        cfg = load_config(root)
+        m["telelog"] = telelog_payload(analysis, parsed, TelelogStore(root).verified(), cfg.predicate())
+    return m
 
 
 @router.get("/algorithm")

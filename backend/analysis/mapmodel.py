@@ -126,8 +126,17 @@ def _entry_points(analysis: Analysis) -> list[dict[str, Any]]:
     return out
 
 
-def build_map(analysis: Analysis, overrides: dict[str, str] | None = None) -> dict[str, Any]:
+TAG_TO_ROLE = {"main": "main", "sub": "main", "helper": "child"}
+"""A telelog `sub` is a meaningful named step, so it stays on the map; a `helper` folds into its caller."""
+
+
+def build_map(
+    analysis: Analysis, overrides: dict[str, str] | None = None, tags: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """`tags` (function id -> telelog Tag) sets a function's role where written; a pin still wins over a tag.
+    Without tags the payload is exactly what it was before telelog."""
     overrides = overrides or {}
+    tags = tags or {}
     reg = analysis.registry
     cg = analysis.callgraph
 
@@ -210,6 +219,9 @@ def build_map(analysis: Analysis, overrides: dict[str, str] | None = None) -> di
             role, reasons = "child", ["leaf helper: calls nothing, no I/O"]
         else:
             role = "main" if score >= MAIN_THRESHOLD else "child"
+        tag = tags.get(fid)
+        if tag is not None and tag.role in TAG_TO_ROLE:
+            role, reasons = TAG_TO_ROLE[tag.role], [f"tagged {tag.role} (telelog)"] + reasons
         if fid in overrides and overrides[fid] in ("main", "child"):
             role, reasons = overrides[fid], [f"pinned {overrides[fid]} by override"] + reasons
         funcs[fid] = {
@@ -220,6 +232,8 @@ def build_map(analysis: Analysis, overrides: dict[str, str] | None = None) -> di
             "depth": depth.get(fid), "endpoints": sorted(reached_by[fid]),
             "unresolved_calls": unresolved.get(fid, 0),
         }
+        if tag is not None:
+            funcs[fid]["tag"] = {"role": tag.role, "feature": tag.feature, "purpose": tag.purpose}
 
     mains = {fid for fid, d in funcs.items() if d["role"] == "main"}
 

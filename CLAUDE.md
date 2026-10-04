@@ -20,6 +20,13 @@ When writing, debugging, or modifying code in this codebase or the target backen
 | `get_algorithm(function_id)` | A function's algorithm card: locked facts + ordered steps (calls, decisions, loops, raises, returns) with stable ids. |
 | `write_algorithm(function_id, purpose, steps)` | Write the wording for a card (purpose + per-step `label`/`note`). Blanks only: steps and facts cannot be added, removed or reordered. |
 | `pin_function(function_id, role)` | Pin a function as `main` or `child` on the map (empty role resets to the automatic score). |
+| `list_untagged(limit, cursor, feature)` | Telelog: a page of functions with no `@telelog` tag (endpoints first). See `telelog/SKILL.md`. |
+| `get_function(ids)` | Telelog: capped source, route, callers, callees, tables and existing tag for up to 25 functions. |
+| `get_feature_tree()` | Telelog: existing features and their main functions, to reuse names. |
+| `validate_tags()` | Telelog: errors (missing, orphan, duplicate, unknown parent, over-cap, bad source) and warnings (stale, renamed, `purpose: ?`). |
+| `suggest_parent(function_id)` | Telelog: tagged callers of a function, nearest first. |
+| `check_changed(paths)` | Telelog: tagged functions whose body changed since verified, plus untagged ones, for given files (used by the edit hook). |
+| `record_progress(ids)` / `get_progress()` | Telelog: mark functions handled by an audit; tagged ones become verified. |
 
 ---
 

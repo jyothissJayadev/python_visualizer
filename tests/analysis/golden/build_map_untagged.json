@@ -1,0 +1,308 @@
+{
+  "edges": [
+    {
+      "from": "app.api:get_orders",
+      "kind": "await",
+      "to": "app.services:list_orders",
+      "via": []
+    },
+    {
+      "from": "app.api:post_order",
+      "kind": "await",
+      "to": "app.services:create_order",
+      "via": []
+    },
+    {
+      "from": "app.services:create_order",
+      "kind": "await",
+      "to": "app.services:list_orders",
+      "via": []
+    }
+  ],
+  "endpoints": [
+    {
+      "handler_id": "app.api:get_orders",
+      "id": "GET /orders",
+      "method": "GET",
+      "path": "/orders",
+      "summary": null
+    },
+    {
+      "handler_id": "app.api:post_order",
+      "id": "POST /orders",
+      "method": "POST",
+      "path": "/orders",
+      "summary": null
+    }
+  ],
+  "entry_points": [
+    {
+      "file_path": "app/main.py",
+      "framework": "FastAPI",
+      "id": "app.main:app",
+      "kind": "app",
+      "line": 3,
+      "module": "app.main"
+    }
+  ],
+  "functions": {
+    "app.api:get_orders": {
+      "children": [],
+      "depth": 0,
+      "doc": null,
+      "end_line": 9,
+      "endpoints": [
+        "GET /orders"
+      ],
+      "file_path": "app/api.py",
+      "id": "app.api:get_orders",
+      "is_async": true,
+      "layer": "api",
+      "line": 8,
+      "metrics": {
+        "branches": 0,
+        "endpoints": 1,
+        "fan_in": 0,
+        "fan_out": 1,
+        "io": [],
+        "loc": 2,
+        "private": false
+      },
+      "module": "app.api",
+      "name": "get_orders",
+      "qual": "get_orders",
+      "reasons": [
+        "endpoint handler",
+        "calls 1 function(s) (+3)",
+        "tiny wrapper (-15)"
+      ],
+      "role": "main",
+      "score": -12.0,
+      "signature": "()",
+      "unresolved_calls": 0
+    },
+    "app.api:post_order": {
+      "children": [],
+      "depth": 0,
+      "doc": null,
+      "end_line": 6,
+      "endpoints": [
+        "POST /orders"
+      ],
+      "file_path": "app/api.py",
+      "id": "app.api:post_order",
+      "is_async": true,
+      "layer": "api",
+      "line": 5,
+      "metrics": {
+        "branches": 0,
+        "endpoints": 1,
+        "fan_in": 0,
+        "fan_out": 1,
+        "io": [],
+        "loc": 2,
+        "private": false
+      },
+      "module": "app.api",
+      "name": "post_order",
+      "qual": "post_order",
+      "reasons": [
+        "endpoint handler",
+        "calls 1 function(s) (+3)",
+        "tiny wrapper (-15)"
+      ],
+      "role": "main",
+      "score": -12.0,
+      "signature": "(body: dict)",
+      "unresolved_calls": 0
+    },
+    "app.services:create_order": {
+      "children": [
+        "app.utils:norm"
+      ],
+      "depth": 1,
+      "doc": null,
+      "end_line": 11,
+      "endpoints": [
+        "POST /orders"
+      ],
+      "file_path": "app/services.py",
+      "id": "app.services:create_order",
+      "is_async": true,
+      "layer": "service",
+      "line": 3,
+      "metrics": {
+        "branches": 1,
+        "endpoints": 1,
+        "fan_in": 1,
+        "fan_out": 2,
+        "io": [
+          "ext:httpx"
+        ],
+        "loc": 9,
+        "private": false
+      },
+      "module": "app.services",
+      "name": "create_order",
+      "qual": "create_order",
+      "reasons": [
+        "calls 2 function(s) (+6)",
+        "touches I/O: ext:httpx (+15)",
+        "has branching logic (+5)",
+        "9 lines (+2.25)"
+      ],
+      "role": "main",
+      "score": 28.2,
+      "signature": "(body)",
+      "unresolved_calls": 0
+    },
+    "app.services:list_orders": {
+      "children": [
+        "app.utils:_tiny",
+        "app.utils:norm"
+      ],
+      "depth": 1,
+      "doc": null,
+      "end_line": 16,
+      "endpoints": [
+        "GET /orders",
+        "POST /orders"
+      ],
+      "file_path": "app/services.py",
+      "id": "app.services:list_orders",
+      "is_async": true,
+      "layer": "service",
+      "line": 12,
+      "metrics": {
+        "branches": 1,
+        "endpoints": 2,
+        "fan_in": 2,
+        "fan_out": 2,
+        "io": [],
+        "loc": 5,
+        "private": false
+      },
+      "module": "app.services",
+      "name": "list_orders",
+      "qual": "list_orders",
+      "reasons": [
+        "calls 2 function(s) (+6)",
+        "reached from 2 endpoints (+8)",
+        "has branching logic (+5)",
+        "5 lines (+1.25)"
+      ],
+      "role": "main",
+      "score": 20.2,
+      "signature": "()",
+      "unresolved_calls": 0
+    },
+    "app.utils:_tiny": {
+      "depth": 2,
+      "doc": null,
+      "end_line": 4,
+      "endpoints": [
+        "GET /orders",
+        "POST /orders"
+      ],
+      "file_path": "app/utils.py",
+      "id": "app.utils:_tiny",
+      "is_async": false,
+      "layer": "util",
+      "line": 3,
+      "metrics": {
+        "branches": 0,
+        "endpoints": 2,
+        "fan_in": 1,
+        "fan_out": 0,
+        "io": [],
+        "loc": 2,
+        "private": true
+      },
+      "module": "app.utils",
+      "name": "_tiny",
+      "qual": "_tiny",
+      "reasons": [
+        "leaf helper: calls nothing, no I/O"
+      ],
+      "role": "child",
+      "score": -25.0,
+      "shared": false,
+      "signature": "()",
+      "unresolved_calls": 0,
+      "used_by": [
+        "app.services:list_orders"
+      ]
+    },
+    "app.utils:norm": {
+      "depth": 2,
+      "doc": null,
+      "end_line": 2,
+      "endpoints": [
+        "GET /orders",
+        "POST /orders"
+      ],
+      "file_path": "app/utils.py",
+      "id": "app.utils:norm",
+      "is_async": false,
+      "layer": "util",
+      "line": 1,
+      "metrics": {
+        "branches": 0,
+        "endpoints": 2,
+        "fan_in": 2,
+        "fan_out": 0,
+        "io": [],
+        "loc": 2,
+        "private": false
+      },
+      "module": "app.utils",
+      "name": "norm",
+      "qual": "norm",
+      "reasons": [
+        "leaf helper: calls nothing, no I/O"
+      ],
+      "role": "child",
+      "score": -15.0,
+      "shared": true,
+      "signature": "(x)",
+      "unresolved_calls": 0,
+      "used_by": [
+        "app.services:create_order",
+        "app.services:list_orders"
+      ]
+    }
+  },
+  "layers": [
+    "api",
+    "service"
+  ],
+  "modules": [
+    {
+      "file_path": "app/api.py",
+      "functions": [
+        "app.api:post_order",
+        "app.api:get_orders"
+      ],
+      "layer": "api",
+      "module": "app.api"
+    },
+    {
+      "file_path": "app/services.py",
+      "functions": [
+        "app.services:create_order",
+        "app.services:list_orders"
+      ],
+      "layer": "service",
+      "module": "app.services"
+    }
+  ],
+  "project_path": "<root>",
+  "stats": {
+    "child": 2,
+    "edges": 3,
+    "functions": 6,
+    "main": 4,
+    "unreached": 0
+  },
+  "unreached": []
+}

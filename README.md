@@ -189,6 +189,21 @@ Or from the shell: `claude mcp add brain-telemetry-arthur -e BRAIN_COLLECTOR_URL
 The tools appear namespaced by server name (`mcp__brain-telemetry-arthur__arm_functions`, ...), so
 pick the server that matches the target you are debugging. Restart Claude Code after editing `.mcp.json`.
 
+## Telelog: what the code means
+
+Telelog adds a human-meaning layer. The coding agent writes a `# @telelog` comment block above each
+function (role, feature, parent, purpose, data in and out, DB tables); the **Telelog** view on the Map tab
+reads them and shows features, flows, ordered steps and live sample values. The **Deterministic** view stays one
+click away. Tags are comments only: nothing is imported or executed, and the visualizer never edits your code.
+
+- **Tag format and audit rules:** `telelog/SKILL.md` (the Claude Code skill; run `/telelog` to tag a project).
+- **Install in a target:** `telelog/INSTALL.md` (MCP server entry, skill, edit hook, `.telelog/` config).
+- **Tools:** `list_untagged`, `get_function`, `get_feature_tree`, `validate_tags`, `suggest_parent`,
+  `check_changed`, `record_progress`, `get_progress` (per instance, like the tools below).
+- **State:** `<target>/.telelog/state/` (gitignore it) and `<target>/.telelog/config` (excluded paths; tests,
+  migrations and generated code are skipped by default).
+- **Design and review notes:** `docs/designs/telelog.md`.
+
 ## Using the dashboard
 
 - **Instance badge** (bottom-right) and page title name the target; tabs the instance doesn't offer

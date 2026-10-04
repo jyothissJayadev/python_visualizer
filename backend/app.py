@@ -15,6 +15,7 @@ from backend.api import viewer
 from backend.api.instance import router as instance_router
 from backend.api.lineage import router as lineage_router
 from backend.api.map import router as map_router
+from backend.api.telelog import router as telelog_router
 from backend.api.routes import router as routes_router
 from backend.api.viewer import router as viewer_router
 from backend.config import ALL_FEATURES, DEFAULT_IGNORED_DIRECTORIES, ExplorerConfig
@@ -77,6 +78,7 @@ def create_app(
     app.include_router(routes_router)
     app.include_router(lineage_router)
     app.include_router(map_router)
+    app.include_router(telelog_router)
     return app
 
 

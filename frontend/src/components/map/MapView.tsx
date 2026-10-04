@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { mapApi, type AlgoStep, type AlgorithmCard, type MapFunction, type ProjectMap } from "../../lib/mapApi";
 import { edgePath, layoutMap, type Box } from "../../lib/mapLayout";
+import { TelelogMap, ViewSwitch } from "./TelelogMap";
 
 const MIN_K = 0.08;
 const MAX_K = 3.2;
@@ -54,7 +55,7 @@ function StepTree({ steps, onJump }: { steps: AlgoStep[]; onJump: (id: string) =
   );
 }
 
-export function MapView({ active }: { active: boolean }) {
+function DeterministicMap({ active, onSwitch }: { active: boolean; onSwitch: () => void }) {
   const [map, setMap] = useState<ProjectMap | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<View>({ x: 20, y: 20, k: 0.6 });
@@ -229,6 +230,7 @@ export function MapView({ active }: { active: boolean }) {
     <div className="mp-workspace">
       <div className="mp-canvas-wrap" ref={wrapRef}>
         <div className="mp-toolbar">
+          <ViewSwitch mode="deterministic" onChange={(m) => m === "telelog" && onSwitch()} />
           <div className="mp-search">
             <input
               className="rt-input"
@@ -462,5 +464,21 @@ export function MapView({ active }: { active: boolean }) {
         </aside>
       )}
     </div>
+  );
+}
+
+/** Telelog (what things mean) and Deterministic (what the code does) are one click apart; both stay mounted so
+ *  switching back keeps your place. */
+export function MapView({ active }: { active: boolean }) {
+  const [mode, setMode] = useState<"telelog" | "deterministic">("telelog");
+  return (
+    <>
+      <div className="tl-pane" style={{ display: mode === "telelog" ? "flex" : "none" }}>
+        <TelelogMap active={active && mode === "telelog"} onSwitch={() => setMode("deterministic")} />
+      </div>
+      <div className="tl-pane" style={{ display: mode === "deterministic" ? "flex" : "none" }}>
+        <DeterministicMap active={active && mode === "deterministic"} onSwitch={() => setMode("telelog")} />
+      </div>
+    </>
   );
 }
